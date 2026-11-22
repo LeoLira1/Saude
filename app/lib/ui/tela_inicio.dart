@@ -434,12 +434,15 @@ class _CartaoPulseira extends StatelessWidget {
     final hoje = DateTime.now();
     final h = app.atividadeDe(hoje);
     final ontem = app.atividadeDe(hoje.subtract(const Duration(days: 1)));
-    final fc = h?.fcRepouso ?? ontem?.fcRepouso;
+    // FC de repouso: a de hoje (se o Mi Fitness mandou) ou a de ontem; "est." = calculada pelo app.
+    final diaFc = h?.fcRepouso != null ? h : ontem;
+    final fc = diaFc?.fcRepouso;
+    final fcTxt = fc == null ? '—' : '${fc.round()} bpm${diaFc!.fcRepousoEstimada == true ? ' (est.)' : ''}${diaFc == ontem ? ' · ontem' : ''}';
     final itens = [
       (Icons.directions_walk, 'Passos', milhar(h?.passos), Cores.ciano),
       (Icons.local_fire_department_outlined, 'Calorias ativas', h?.calorias == null ? '—' : '${milhar(h!.calorias)} kcal', Cores.ambar),
       (Icons.bedtime_outlined, 'Sono (última noite)', horasMin(h?.sonoMin), Cores.violeta),
-      (Icons.favorite_border, 'FC de repouso', fc == null ? '—' : '${fc.round()} bpm', Cores.rosa),
+      (Icons.favorite_border, 'FC de repouso', fcTxt, Cores.rosa),
     ];
     return Card(
       child: Padding(

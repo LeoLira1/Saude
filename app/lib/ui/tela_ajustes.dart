@@ -174,6 +174,8 @@ class _TelaAjustesState extends State<TelaAjustes> {
               style: TextStyle(color: Cores.suave, fontSize: 12, height: 1.4),
             ),
             const SizedBox(height: 10),
+            _SegundoPlano(app: app),
+            const SizedBox(height: 10),
             OutlinedButton.icon(
               onPressed: app.sincronizando ? null : () => app.sincronizar(),
               icon: const Icon(Icons.sync),
@@ -217,4 +219,63 @@ class _Secao extends StatelessWidget {
           ),
         ),
       );
+}
+
+/// Situação da sincronização diária com o app fechado.
+class _SegundoPlano extends StatelessWidget {
+  const _SegundoPlano({required this.app});
+  final EstadoApp app;
+
+  String _quando(String? iso) {
+    final d = iso == null ? null : DateTime.tryParse(iso);
+    if (d == null) return '';
+    final dd = '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}';
+    return '$dd às ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!app.hcPermissao) return const SizedBox.shrink();
+    final st = app.arm.statusSegundoPlano;
+    final String permTxt;
+    Widget? botao;
+    var ok = true;
+    if (!app.hcSegundoPlanoDisponivel) {
+      ok = false;
+      permTxt = 'O Health Connect deste celular não permite ler com o app fechado. '
+          'Atualize o Health Connect na Play Store, ou abra o app Saúde pelo menos 1 vez a cada 7 dias '
+          '(ele recupera os dias que faltaram).';
+    } else if (!app.hcSegundoPlanoAutorizado) {
+      ok = false;
+      permTxt = 'Falta liberar "acessar dados em segundo plano" no Health Connect: sem isso, a sincronização diária com o app fechado não lê nada.';
+      botao = FilledButton.tonal(onPressed: app.pedirSegundoPlano, child: const Text('Liberar'));
+    } else {
+      permTxt = 'Leitura com o app fechado liberada.';
+    }
+    final String execTxt;
+    if (st == null) {
+      execTxt = 'Sincronização diária com o app fechado: ainda não rodou (roda 1x por dia, com internet).';
+    } else if (st['ok'] == true) {
+      execTxt = 'Última sincronização com o app fechado: ${_quando(st['quando'] as String?)} ✓ (${st['dias_lidos'] ?? 0} dias lidos).';
+    } else {
+      ok = false;
+      execTxt = 'Última sincronização com o app fechado: ${_quando(st['quando'] as String?)} — falhou: ${st['erro'] ?? 'erro desconhecido'}';
+    }
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: Cores.cartao2, borderRadius: BorderRadius.circular(14)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(ok ? Icons.check_circle : Icons.warning_amber_rounded, size: 18, color: ok ? Cores.verde : Cores.ambar),
+          const SizedBox(width: 8),
+          const Expanded(child: Text('Segundo plano', style: TextStyle(fontWeight: FontWeight.w600))),
+          ?botao,
+        ]),
+        const SizedBox(height: 6),
+        Text(permTxt, style: const TextStyle(color: Cores.suave, fontSize: 12, height: 1.35)),
+        const SizedBox(height: 4),
+        Text(execTxt, style: const TextStyle(color: Cores.suave, fontSize: 12, height: 1.35)),
+      ]),
+    );
+  }
 }

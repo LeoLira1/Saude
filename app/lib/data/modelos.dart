@@ -70,6 +70,9 @@ class AtividadeDia {
   final int? passos;
   final double? calorias;
   final double? fcRepouso;
+
+  /// true = FC de repouso calculada pelo app (o Mi Fitness não mandou a dele); false = a do Health Connect.
+  final bool? fcRepousoEstimada;
   final double? fcMedia;
   final double? sonoMin;
   final double? sonoProfundoMin;
@@ -83,6 +86,7 @@ class AtividadeDia {
     this.passos,
     this.calorias,
     this.fcRepouso,
+    this.fcRepousoEstimada,
     this.fcMedia,
     this.sonoMin,
     this.sonoProfundoMin,
@@ -91,6 +95,27 @@ class AtividadeDia {
     this.acordadoMin,
     this.spo2Medio,
   });
+
+  /// Junta com o que já estava salvo: campo que veio vazio nesta leitura mantém o valor anterior
+  /// (ex.: uma leitura em segundo plano que falhou só para passos não apaga os passos do dia).
+  AtividadeDia mesclarSobre(AtividadeDia? antigo) {
+    if (antigo == null) return this;
+    final usaFcNova = fcRepouso != null;
+    return AtividadeDia(
+      data: data,
+      passos: passos ?? antigo.passos,
+      calorias: calorias ?? antigo.calorias,
+      fcRepouso: usaFcNova ? fcRepouso : antigo.fcRepouso,
+      fcRepousoEstimada: usaFcNova ? fcRepousoEstimada : antigo.fcRepousoEstimada,
+      fcMedia: fcMedia ?? antigo.fcMedia,
+      sonoMin: sonoMin ?? antigo.sonoMin,
+      sonoProfundoMin: sonoMin != null ? sonoProfundoMin : antigo.sonoProfundoMin,
+      sonoLeveMin: sonoMin != null ? sonoLeveMin : antigo.sonoLeveMin,
+      sonoRemMin: sonoMin != null ? sonoRemMin : antigo.sonoRemMin,
+      acordadoMin: sonoMin != null ? acordadoMin : antigo.acordadoMin,
+      spo2Medio: spo2Medio ?? antigo.spo2Medio,
+    );
+  }
 
   bool get vazio =>
       passos == null &&
@@ -105,6 +130,7 @@ class AtividadeDia {
         'passos': passos,
         'calorias': calorias,
         'fc_repouso': fcRepouso,
+        'fc_repouso_estimada': fcRepousoEstimada == null ? null : (fcRepousoEstimada! ? 1 : 0),
         'fc_media': fcMedia,
         'sono_min': sonoMin,
         'sono_profundo_min': sonoProfundoMin,
@@ -121,6 +147,7 @@ class AtividadeDia {
         passos: (j['passos'] as num?)?.round(),
         calorias: _d(j['calorias']),
         fcRepouso: _d(j['fc_repouso']),
+        fcRepousoEstimada: j['fc_repouso_estimada'] == null ? null : (j['fc_repouso_estimada'] == 1 || j['fc_repouso_estimada'] == true),
         fcMedia: _d(j['fc_media']),
         sonoMin: _d(j['sono_min']),
         sonoProfundoMin: _d(j['sono_profundo_min']),

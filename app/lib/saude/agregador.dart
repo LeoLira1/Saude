@@ -106,6 +106,16 @@ double? fcRepousoEstimada(List<double> batimentos) {
   return _media(l.take(n));
 }
 
+/// Quantos dias reler: desde a última leitura bem-sucedida (incluindo aquele dia, que pode ter ficado
+/// incompleto), no mínimo 7 e no máximo 30 (limite do Health Connect sem permissão de histórico).
+int diasParaLer(DateTime? ultimaOk, DateTime agora) {
+  if (ultimaOk == null) return 30;
+  final a = DateTime(ultimaOk.year, ultimaOk.month, ultimaOk.day);
+  final h = DateTime(agora.year, agora.month, agora.day);
+  final desde = h.difference(a).inDays + 1;
+  return desde.clamp(7, 30);
+}
+
 /// Monta os dias a partir do que foi lido.
 List<AtividadeDia> montarDias({
   required List<String> datas,
@@ -115,6 +125,8 @@ List<AtividadeDia> montarDias({
   required List<Amostra> fcRepouso,
   required List<Amostra> spo2,
   required Map<String, Noite> sono,
+  /// "AAAA-MM-DD" de hoje: a FC de repouso NÃO é estimada para hoje (dia incompleto distorce).
+  String? hoje,
 }) {
   Map<String, List<double>> porDia(List<Amostra> l) {
     final m = <String, List<double>>{};
@@ -128,13 +140,22 @@ List<AtividadeDia> montarDias({
   final rhr = porDia(fcRepouso);
   final ox = porDia(spo2);
 
+  ({double? valor, bool? estimada}) repouso(String d) {
+    final real = _media(rhr[d] ?? const []);
+    if (real != null) return (valor: _r(real, 0), estimada: false);
+    if (hoje != null && d.compareTo(hoje) >= 0) return (valor: null, estimada: null);
+    final est = fcRepousoEstimada(hr[d] ?? const []);
+    return est == null ? (valor: null, estimada: null) : (valor: _r(est, 0), estimada: true);
+  }
+
   return [
     for (final d in datas)
       AtividadeDia(
         data: d,
         passos: passos[d],
         calorias: _r(calorias[d], 0),
-        fcRepouso: _r(_media(rhr[d] ?? const []) ?? fcRepousoEstimada(hr[d] ?? const []), 0),
+        fcRepouso: repouso(d).valor,
+        fcRepousoEstimada: repouso(d).estimada,
         fcMedia: _r(_media(hr[d] ?? const []), 0),
         sonoMin: sono[d] == null || sono[d]!.total <= 0 ? null : _r(sono[d]!.total, 0),
         sonoProfundoMin: sono[d] == null || sono[d]!.total <= 0 ? null : _r(sono[d]!.profundo, 0),

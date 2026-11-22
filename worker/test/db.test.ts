@@ -67,3 +67,31 @@ test("balança: peso e impedância idênticos nos 30 min anteriores = duplicada,
 	assert.equal(menosMinutos("2026-11-23 00:10:00", 30), "2026-11-22 23:40:00");
 	assert.equal((await lerMedicoes(db as never, "2026-11-22", "2026-11-23")).length, 6); // 4 em 22/11 + 2 em 23/11
 });
+
+test("migração: fc_repouso_estimada entra sem mexer nos dados de atividade_diaria", async () => {
+	const { migrarColunas } = await import("../src/db.ts");
+	const db = createClient({ url: ":memory:" });
+	// Tabela antiga, sem a coluna nova, com um dia gravado.
+	await db.execute(`CREATE TABLE atividade_diaria (data TEXT PRIMARY KEY, passos INTEGER, calorias REAL, fc_repouso REAL,
+		fc_media REAL, sono_min REAL, sono_profundo_min REAL, sono_leve_min REAL, sono_rem_min REAL, acordado_min REAL,
+		spo2_medio REAL, atualizado_em TEXT NOT NULL DEFAULT (datetime('now', '-3 hours')))`);
+	await db.execute("INSERT INTO atividade_diaria (data, passos, fc_repouso) VALUES ('2026-11-21', 8000, 60)");
+	assert.deepEqual(await migrarColunas(db as never), ["atividade_diaria.fc_repouso_estimada"]);
+	assert.deepEqual(await migrarColunas(db as never), []); // segunda vez não faz nada
+	const antes = (await lerAtividade(db as never, "2026-11-01", "2026-11-30"))[0];
+	assert.equal(antes.passos, 8000);
+	assert.equal(antes.fc_repouso, 60);
+	assert.equal(antes.fc_repouso_estimada, null);
+
+	await upsertAtividade(db as never, [{ data: "2026-11-21", fc_repouso: 57, fc_repouso_estimada: 1 }]);
+	await upsertAtividade(db as never, [{ data: "2026-11-21", passos: 9000 }]); // sem FC: mantém a anterior
+	const d = (await lerAtividade(db as never, "2026-11-21", "2026-11-21"))[0];
+	assert.equal(d.passos, 9000);
+	assert.equal(d.fc_repouso, 57);
+	assert.equal(d.fc_repouso_estimada, 1);
+	// A real chega depois: troca o valor e desmarca a estimativa.
+	await upsertAtividade(db as never, [{ data: "2026-11-21", fc_repouso: 59, fc_repouso_estimada: 0 }]);
+	const e = (await lerAtividade(db as never, "2026-11-21", "2026-11-21"))[0];
+	assert.equal(e.fc_repouso, 59);
+	assert.equal(e.fc_repouso_estimada, 0);
+});

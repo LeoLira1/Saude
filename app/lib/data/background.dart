@@ -11,11 +11,17 @@ const tarefaDiaria = 'sinc-diaria';
 void despachanteSegundoPlano() {
   Workmanager().executeTask((tarefa, dados) async {
     WidgetsFlutterBinding.ensureInitialized();
+    Armazenamento? arm;
     try {
-      final arm = await Armazenamento.abrir();
-      await Sincronizacao(arm).tudo();
-    } catch (_) {
-      // Falhou: o WorkManager tenta de novo no próximo ciclo; o app também sincroniza ao abrir.
+      arm = await Armazenamento.abrir();
+      await Sincronizacao(arm).tudo(segundoPlano: true);
+    } catch (e) {
+      // Registra para aparecer em Ajustes; o WorkManager tenta de novo no próximo ciclo.
+      try {
+        arm ??= await Armazenamento.abrir();
+        arm.statusSegundoPlano = {'quando': DateTime.now().toIso8601String(), 'ok': false, 'erro': '$e'};
+        await arm.salvar();
+      } catch (_) {}
     }
     return true;
   });

@@ -18,6 +18,7 @@ const FAIXA_ATIVIDADE: Record<(typeof COLUNAS_ATIVIDADE)[number], [number, numbe
 	passos: [0, 200_000],
 	calorias: [0, 20_000],
 	fc_repouso: [20, 220],
+	fc_repouso_estimada: [0, 1],
 	fc_media: [20, 250],
 	sono_min: [0, 1440],
 	sono_profundo_min: [0, 1440],
@@ -75,7 +76,7 @@ export function validarAtividade(o: unknown): Atividade {
 	const a: Atividade = { data: r.data };
 	for (const c of COLUNAS_ATIVIDADE) {
 		const n = numero(r[c], c, FAIXA_ATIVIDADE[c]);
-		a[c] = c === "passos" && n !== null ? Math.round(n) : n;
+		a[c] = (c === "passos" || c === "fc_repouso_estimada") && n !== null ? Math.round(n) : n;
 	}
 	return a;
 }

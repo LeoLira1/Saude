@@ -281,6 +281,7 @@ function createServer() {
 				if (!mesmaData && a.atividade && b.atividade) {
 					difAt = {};
 					for (const c of COLUNAS_ATIVIDADE) {
+						if (c === "fc_repouso_estimada") continue;
 						const x = a.atividade[c];
 						const y = b.atividade[c];
 						if (typeof x === "number" && typeof y === "number") difAt[c] = arred(y - x, 1);
@@ -332,6 +333,7 @@ function createServer() {
 		{
 			description:
 				"Atividade diária da pulseira (Mi Band via Health Connect) no período: passos, calorias ativas, FC de repouso e média, sono e SpO2, " +
+					"(fc_repouso_estimada = 1: o Mi Fitness não mandou a FC de repouso e o app estimou pelos menores batimentos do dia), " +
 				"mais as médias do período. O sono fica na data em que você acordou. Só leitura.",
 			inputSchema: z.object({ periodo: PERIODO }),
 			annotations: { readOnlyHint: true, openWorldHint: false },
@@ -344,7 +346,7 @@ function createServer() {
 				const med = (k: (typeof COLUNAS_ATIVIDADE)[number]) =>
 					arred(media(at.map((d) => d[k]).filter((v): v is number => typeof v === "number" && v > 0)), 1);
 				const medias: Record<string, number | null> = {};
-				for (const c of COLUNAS_ATIVIDADE) medias[c] = med(c);
+				for (const c of COLUNAS_ATIVIDADE) if (c !== "fc_repouso_estimada") medias[c] = med(c);
 				const total = at.reduce((s, d) => s + (d.passos ?? 0), 0);
 				return json({
 					periodo: p,

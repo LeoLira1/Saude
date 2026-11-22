@@ -1,3 +1,4 @@
+import '../saude/agregador.dart';
 import '../saude/health_sync.dart';
 import 'api.dart';
 import 'armazenamento.dart';
@@ -7,6 +8,9 @@ class ResultadoSinc {
   int diasEnviados = 0;
   int diasLidos = 0;
   String? erro;
+
+  /// Leitura do Health Connect aconteceu e trouxe os dados principais (passos e sono) sem erro.
+  bool saudeOk = false;
   @override
   String toString() => 'medições: $medicoesEnviadas, dias lidos: $diasLidos, dias enviados: $diasEnviados, erro: $erro';
 }
@@ -19,18 +23,26 @@ class Sincronizacao {
 
   ApiSaude get _api => ApiSaude(arm.apiUrl, arm.apiKey);
 
-  Future<ResultadoSinc> tudo({bool lerSaude = true}) async {
+  Future<ResultadoSinc> tudo({bool lerSaude = true, bool segundoPlano = false}) async {
     final r = ResultadoSinc();
     if (lerSaude) {
       try {
         final hs = HealthSync.instancia;
-        if (await hs.disponivel() && await hs.temPermissao()) {
-          // Primeira vez: 30 dias (limite do Health Connect sem permissão de histórico). Depois: 7.
-          final dias = arm.ultimaSincSaude == null ? 30 : 7;
+        if (!await hs.disponivel()) {
+          r.erro = 'Health Connect não disponível';
+        } else if (!await hs.temPermissao()) {
+          r.erro = 'Sem permissão de leitura no Health Connect';
+        } else {
+          // Relê desde a última leitura boa (mín. 7, máx. 30 dias): recupera os dias em que nada sincronizou.
+          final dias = diasParaLer(arm.ultimaSincSaude, DateTime.now());
           final lidos = await hs.lerDias(dias);
           arm.gravarAtividade(lidos.where((d) => !d.vazio));
-          arm.ultimaSincSaude = DateTime.now();
           r.diasLidos = lidos.length;
+          // Só conta como leitura boa se passos e sono vieram sem erro (senão, a próxima relê esses dias).
+          final principais = hs.erros.where((e) => e.startsWith('STEPS') || e.startsWith('SLEEP'));
+          r.saudeOk = principais.isEmpty;
+          if (r.saudeOk) arm.ultimaSincSaude = DateTime.now();
+          if (hs.erros.isNotEmpty) r.erro = 'Health Connect: ${hs.erros.first}${hs.erros.length > 1 ? ' (+${hs.erros.length - 1})' : ''}';
         }
       } catch (e) {
         r.erro = 'Health Connect: $e';
@@ -38,6 +50,15 @@ class Sincronizacao {
     }
     await arm.salvar();
     await enviarPendentes(r);
+    if (segundoPlano) {
+      arm.statusSegundoPlano = {
+        'quando': DateTime.now().toIso8601String(),
+        'ok': r.saudeOk && r.erro == null,
+        'dias_lidos': r.diasLidos,
+        'dias_enviados': r.diasEnviados,
+        'erro': r.erro,
+      };
+    }
     await arm.salvar();
     return r;
   }

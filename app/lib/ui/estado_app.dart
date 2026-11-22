@@ -20,6 +20,10 @@ class EstadoApp extends ChangeNotifier {
   bool permissaoBluetooth = false;
   bool? hcDisponivel;
   bool hcPermissao = false;
+
+  /// Leitura com o app fechado (permissão de segundo plano do Health Connect).
+  bool hcSegundoPlanoDisponivel = false;
+  bool hcSegundoPlanoAutorizado = false;
   bool sincronizando = false;
   String? avisoSinc;
 
@@ -60,6 +64,11 @@ class EstadoApp extends ChangeNotifier {
     try {
       hcDisponivel = await HealthSync.instancia.disponivel();
       hcPermissao = hcDisponivel == true && await HealthSync.instancia.temPermissao();
+      if (hcPermissao) {
+        final sp = await HealthSync.instancia.segundoPlano();
+        hcSegundoPlanoDisponivel = sp.disponivel;
+        hcSegundoPlanoAutorizado = sp.autorizada;
+      }
     } catch (_) {
       hcDisponivel = false;
     }
@@ -184,6 +193,11 @@ class EstadoApp extends ChangeNotifier {
     await arm.salvar();
     notifyListeners();
     await sincronizar(lerSaude: false);
+  }
+
+  Future<void> pedirSegundoPlano() async {
+    await HealthSync.instancia.pedirSegundoPlano();
+    await verificarPermissoes();
   }
 
   Future<void> conectarHealthConnect() async {

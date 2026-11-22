@@ -142,10 +142,12 @@ class Armazenamento {
     };
   }
 
+  /// Grava os dias lidos. Campo vazio na leitura nova não apaga o que já estava salvo.
   void gravarAtividade(Iterable<AtividadeDia> dias) {
     final m = Map<String, dynamic>.from((_dados['atividade'] as Map?) ?? {});
     for (final d in dias) {
-      m[d.data] = d.toJson();
+      final antigo = m[d.data] == null ? null : AtividadeDia.fromJson(Map<String, dynamic>.from(m[d.data] as Map));
+      m[d.data] = d.mesclarSobre(antigo).toJson();
     }
     _dados['atividade'] = m;
   }
@@ -176,6 +178,10 @@ class Armazenamento {
 
   DateTime? get ultimaSincSaude => DateTime.tryParse('${_dados['ultima_sinc_saude']}');
   set ultimaSincSaude(DateTime? d) => _dados['ultima_sinc_saude'] = d?.toIso8601String();
+
+  /// Última execução da sincronização diária em segundo plano (WorkManager).
+  Map<String, dynamic>? get statusSegundoPlano => (_dados['status_segundo_plano'] as Map?)?.cast<String, dynamic>();
+  set statusSegundoPlano(Map<String, dynamic>? v) => _dados['status_segundo_plano'] = v;
 
   String? get ultimoErro => _dados['ultimo_erro'] as String?;
   set ultimoErro(String? e) => _dados['ultimo_erro'] = e;

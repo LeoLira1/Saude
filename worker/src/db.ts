@@ -100,6 +100,7 @@ export const COLUNAS_ATIVIDADE = [
 	"passos",
 	"calorias",
 	"fc_repouso",
+	"fc_repouso_estimada",
 	"fc_media",
 	"sono_min",
 	"sono_profundo_min",
@@ -135,9 +136,34 @@ export function getClient(env: Env): Client {
 }
 
 /** Garante as tabelas (uma vez por instância do Worker). */
+/**
+ * Colunas acrescentadas depois da criação das tabelas. ALTER TABLE ADD COLUMN só roda se a coluna
+ * ainda não existe: não altera nem apaga dado nenhum.
+ */
+export const COLUNAS_NOVAS: { tabela: string; coluna: string; tipo: string }[] = [
+	// 1 = FC de repouso calculada pelo app (o Mi Fitness não mandou a dele); 0 = a do Health Connect.
+	{ tabela: "atividade_diaria", coluna: "fc_repouso_estimada", tipo: "INTEGER" },
+];
+
+export async function migrarColunas(db: Client): Promise<string[]> {
+	const feitas: string[] = [];
+	for (const { tabela, coluna, tipo } of COLUNAS_NOVAS) {
+		const rs = await db.execute(`PRAGMA table_info(${tabela})`);
+		const existe = linhas<{ name: string }>(rs).some((c) => c.name === coluna);
+		if (!existe) {
+			await db.execute(`ALTER TABLE ${tabela} ADD COLUMN ${coluna} ${tipo}`);
+			feitas.push(`${tabela}.${coluna}`);
+		}
+	}
+	return feitas;
+}
+
 export async function garantirTabelas(db: Client): Promise<void> {
 	if (!pronto) {
-		pronto = db.batch(DDL, "write").then(() => undefined);
+		pronto = db
+			.batch(DDL, "write")
+			.then(() => migrarColunas(db))
+			.then(() => undefined);
 		pronto.catch(() => {
 			pronto = null;
 		});

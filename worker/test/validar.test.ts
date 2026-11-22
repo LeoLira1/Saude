@@ -43,3 +43,8 @@ test("chave", () => {
 	assert.ok(!chaveConfere(undefined, "abc"));
 	assert.ok(!chaveConfere("abc", undefined));
 });
+
+test("fc_repouso_estimada só aceita 0 ou 1", () => {
+	assert.equal(validarAtividade({ data: "2026-11-22", fc_repouso: 58, fc_repouso_estimada: 1 }).fc_repouso_estimada, 1);
+	assert.throws(() => validarAtividade({ data: "2026-11-22", fc_repouso_estimada: 2 }));
+});

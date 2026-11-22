@@ -76,11 +76,37 @@ class HealthSync {
     return ok;
   }
 
+  /// Erros da última leitura (por tipo). Vazio = tudo leu.
+  final List<String> erros = [];
+
   Future<List<HealthDataPoint>> _ler(HealthDataType t, DateTime ini, DateTime fim) async {
     try {
       return await _health.getHealthDataFromTypes(types: [t], startTime: ini, endTime: fim);
+    } catch (e) {
+      erros.add('${t.name}: $e'); // segue com os outros tipos, mas fica registrado
+      return const [];
+    }
+  }
+
+  /// Leitura com o app fechado: o Health Connect só deixa com a permissão de segundo plano.
+  /// disponivel = o Health Connect deste celular tem esse recurso; autorizada = você liberou.
+  Future<({bool disponivel, bool autorizada})> segundoPlano() async {
+    await _configurar();
+    try {
+      final disp = await _health.isHealthDataInBackgroundAvailable();
+      final aut = disp && await _health.isHealthDataInBackgroundAuthorized();
+      return (disponivel: disp, autorizada: aut);
     } catch (_) {
-      return const []; // tipo sem permissão ou sem dado: segue com os outros
+      return (disponivel: false, autorizada: false);
+    }
+  }
+
+  Future<bool> pedirSegundoPlano() async {
+    await _configurar();
+    try {
+      return await _health.requestHealthDataInBackgroundAuthorization();
+    } catch (_) {
+      return false;
     }
   }
 
@@ -92,6 +118,7 @@ class HealthSync {
   /// Lê os últimos [dias] dias (hoje incluso) e devolve um resumo por dia.
   Future<List<AtividadeDia>> lerDias(int dias) async {
     await _configurar();
+    erros.clear();
     final agora = DateTime.now();
     final hoje = DateTime(agora.year, agora.month, agora.day);
     final ini = hoje.subtract(Duration(days: dias - 1));
@@ -105,7 +132,9 @@ class HealthSync {
       try {
         final n = await _health.getTotalStepsInInterval(d0, d1.isAfter(agora) ? agora : d1);
         if (n > 0) passos[dataLocal(d0)] = n;
-      } catch (_) {}
+      } catch (e) {
+        erros.add('STEPS ${dataLocal(d0)}: $e');
+      }
     }
     final calorias = <String, double>{};
     try {
@@ -119,7 +148,9 @@ class HealthSync {
         final d = dataLocal(p.dateFrom);
         calorias[d] = (calorias[d] ?? 0) + _num(p);
       }
-    } catch (_) {}
+    } catch (e) {
+      erros.add('ACTIVE_ENERGY_BURNED: $e');
+    }
 
     Amostra a(HealthDataPoint p) => Amostra(p.dateFrom, p.dateTo, _num(p));
 
@@ -127,8 +158,9 @@ class HealthSync {
     final rhr = (await _ler(HealthDataType.RESTING_HEART_RATE, ini, agora)).map(a).toList();
     final ox = (await _ler(HealthDataType.BLOOD_OXYGEN, ini, agora)).map(a).toList();
 
-    // Sono: lê desde 18h do dia anterior ao primeiro, para pegar a noite inteira.
-    final iniSono = ini.subtract(const Duration(hours: 6));
+    // Sono: o Health Connect devolve a sessão pelo horário em que COMEÇOU. Lê desde 00:00 do dia
+    // anterior ao primeiro, para achar também a noite (ou cochilo longo) que acabou no primeiro dia.
+    final iniSono = ini.subtract(const Duration(days: 1));
     final sessoes = (await _ler(HealthDataType.SLEEP_SESSION, iniSono, agora)).map(a).toList();
     final estagios = <EstagioSono>[];
     const mapa = {
@@ -152,6 +184,7 @@ class HealthSync {
       fcRepouso: rhr,
       spo2: ox,
       sono: agregarSono(sessoes, estagios),
+      hoje: dataLocal(agora),
     );
   }
 }
