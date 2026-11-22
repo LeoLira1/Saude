@@ -36,7 +36,13 @@ jobs:
           cache: true
 
       - name: Android SDK 37 (exigido pelo pacote health)
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" > /dev/null
+        run: |
+          # O sdkmanager do runner é antigo e não conhece a API 37: usa as command-line tools novas.
+          curl -sSL -o "$RUNNER_TEMP/cmd.zip" https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q "$RUNNER_TEMP/cmd.zip" -d "$RUNNER_TEMP/cmd"
+          SDKM="$RUNNER_TEMP/cmd/cmdline-tools/bin/sdkmanager --sdk_root=$ANDROID_HOME"
+          yes | $SDKM --licenses > /dev/null || true
+          $SDKM "platforms;android-37" | tail -1
 
       - name: Chave de assinatura do APK (secret APK_KEYSTORE_BASE64)
         env:
