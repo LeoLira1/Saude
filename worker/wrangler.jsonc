@@ -1,0 +1,21 @@
+/**
+ * Worker "saude": API do app Android + servidor MCP.
+ * Endereço: https://saude.<seu-subdominio>.workers.dev
+ *
+ * Nenhum segredo fica aqui. O GitHub Actions (.github/workflows/worker.yml) envia os secrets:
+ *   TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, APP_API_KEY,
+ *   GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, COOKIE_ENCRYPTION_KEY
+ */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "saude",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  // KV do login (OAuth). Sem "id": no primeiro deploy a Cloudflare cria sozinha.
+  "kv_namespaces": [{ "binding": "OAUTH_KV" }],
+  "observability": { "enabled": true },
+  "dev": { "port": 8788 }
+}

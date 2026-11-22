@@ -1,0 +1,102 @@
+# Testa e publica o Worker "saude" (API do app + MCP) na Cloudflare.
+# Os secrets do GitHub (Settings → Secrets and variables → Actions) são enviados para o Worker a cada deploy.
+name: Worker Cloudflare
+
+on:
+  push:
+    paths:
+      - "worker/**"
+      - ".github/workflows/worker.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: worker-deploy
+  cancel-in-progress: false
+
+jobs:
+  testar-e-publicar:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - run: npm ci
+      - run: npm test
+      - run: npx tsc --noEmit
+
+      - name: Conferir secrets
+        id: conf
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          APP_API_KEY: ${{ secrets.APP_API_KEY }}
+          MCP_GITHUB_CLIENT_ID: ${{ secrets.MCP_GITHUB_CLIENT_ID }}
+          MCP_GITHUB_CLIENT_SECRET: ${{ secrets.MCP_GITHUB_CLIENT_SECRET }}
+        run: |
+          faltam=""
+          for n in CLOUDFLARE_API_TOKEN TURSO_DATABASE_URL TURSO_AUTH_TOKEN APP_API_KEY MCP_GITHUB_CLIENT_ID MCP_GITHUB_CLIENT_SECRET; do
+            [ -z "${!n}" ] && faltam="$faltam $n"
+          done
+          if [ -n "$faltam" ]; then
+            echo "::warning::Deploy pulado. Faltam estes secrets no GitHub:$faltam"
+            echo "pronto=nao" >> "$GITHUB_OUTPUT"
+          else
+            echo "pronto=sim" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publicar na Cloudflare
+        if: steps.conf.outputs.pronto == 'sim'
+        run: |
+          npx wrangler deploy 2>&1 | tee "$RUNNER_TEMP/deploy.log"
+          URL=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' "$RUNNER_TEMP/deploy.log" | head -1)
+          echo "URL=$URL" >> "$GITHUB_ENV"
+
+      - name: Enviar secrets para o Worker
+        if: steps.conf.outputs.pronto == 'sim'
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          APP_API_KEY: ${{ secrets.APP_API_KEY }}
+          MCP_GITHUB_CLIENT_ID: ${{ secrets.MCP_GITHUB_CLIENT_ID }}
+          MCP_GITHUB_CLIENT_SECRET: ${{ secrets.MCP_GITHUB_CLIENT_SECRET }}
+        run: |
+          # A chave dos cookies do login sai da chave do app (não precisa de mais um secret).
+          COOKIE_ENCRYPTION_KEY=$(printf 'cookie:%s' "$APP_API_KEY" | sha256sum | cut -c1-64)
+          echo "::add-mask::$COOKIE_ENCRYPTION_KEY"
+          # libsql:// e https:// funcionam; o cliente web usa https.
+          TURSO_URL="${TURSO_DATABASE_URL/libsql:\/\//https://}"
+          umask 077
+          jq -n \
+            --arg url "$TURSO_URL" --arg tok "$TURSO_AUTH_TOKEN" --arg app "$APP_API_KEY" \
+            --arg gid "$MCP_GITHUB_CLIENT_ID" --arg gsec "$MCP_GITHUB_CLIENT_SECRET" --arg ck "$COOKIE_ENCRYPTION_KEY" \
+            '{TURSO_DATABASE_URL:$url, TURSO_AUTH_TOKEN:$tok, APP_API_KEY:$app, GITHUB_CLIENT_ID:$gid, GITHUB_CLIENT_SECRET:$gsec, COOKIE_ENCRYPTION_KEY:$ck}' \
+            > "$RUNNER_TEMP/secrets.json"
+          npx wrangler secret bulk "$RUNNER_TEMP/secrets.json"
+          rm -f "$RUNNER_TEMP/secrets.json"
+
+      - name: Testar a API publicada
+        if: steps.conf.outputs.pronto == 'sim'
+        env:
+          APP_API_KEY: ${{ secrets.APP_API_KEY }}
+        run: |
+          sleep 8
+          echo "### Worker publicado" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Endereço da API (cole no app, em Ajustes): **$URL**" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Endereço do MCP (cole no Claude): **$URL/mcp**" >> "$GITHUB_STEP_SUMMARY"
+          # Lê do banco (e cria as tabelas na primeira vez): confere chave do app + Turso de uma vez.
+          resp=$(curl -s -H "Authorization: Bearer $APP_API_KEY" "$URL/medicoes?desde=2100-01-01")
+          echo "Resposta: $resp"
+          echo "$resp" | grep -q '"medicoes"' || { echo "::error::A API não conseguiu ler o banco: $resp"; exit 1; }
+          echo "- Teste da API + banco Turso: ok ✅" >> "$GITHUB_STEP_SUMMARY"

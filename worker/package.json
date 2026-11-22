@@ -1,0 +1,24 @@
+{
+	"name": "saude-worker",
+	"version": "1.0.0",
+	"private": true,
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev",
+		"type-check": "tsc --noEmit",
+		"test": "node --experimental-strip-types --test test/*.test.ts"
+	},
+	"dependencies": {
+		"@cloudflare/workers-oauth-provider": "^0.8.3",
+		"@libsql/client": "^0.18.0",
+		"@modelcontextprotocol/server": "2.3.1",
+		"agents": "^0.29.0",
+		"hono": "^4.12.27",
+		"zod": "^4.4.3"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^5.20261019.1",
+		"typescript": "6.0.3",
+		"wrangler": "^4.105.0"
+	}
+}

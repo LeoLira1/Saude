@@ -1,0 +1,7 @@
+# Só para rodar localmente (npx wrangler dev). Copie para .dev.vars.
+TURSO_DATABASE_URL=
+TURSO_AUTH_TOKEN=
+APP_API_KEY=
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+COOKIE_ENCRYPTION_KEY=
