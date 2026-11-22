@@ -67,6 +67,20 @@ export const DDL = [
 		fibra_g REAL
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_refeicao_itens_refeicao ON refeicao_itens(refeicao_id)`,
+	// Água ingerida (não confundir com agua_pct da balança, que é % de água corporal).
+	`CREATE TABLE IF NOT EXISTS agua (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		data_hora TEXT NOT NULL,
+		ml INTEGER NOT NULL CHECK (ml > 0 AND ml <= 5000),
+		criado_em TEXT NOT NULL DEFAULT (datetime('now', '-3 hours'))
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_agua_data_hora ON agua(data_hora)`,
+	// Configurações chave/valor (ex.: meta_agua_ml).
+	`CREATE TABLE IF NOT EXISTS config (
+		chave TEXT PRIMARY KEY,
+		valor TEXT NOT NULL,
+		atualizado_em TEXT NOT NULL DEFAULT (datetime('now', '-3 hours'))
+	)`,
 ];
 
 export const COLUNAS_MEDICAO = [

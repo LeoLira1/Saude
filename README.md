@@ -54,6 +54,9 @@ O token do Turso fica só no Worker; o app nunca o vê.
 `ver_medicoes`, `ver_evolucao`, `resumo_periodo`, `comparar_datas`, `ver_atividade`, `ver_sono`,
 `correlacionar`, `registrar_medicao_manual`, `apagar_medicao` e `resumo_hoje`.
 
+Água ingerida: `registrar_agua`, `ver_agua`, `apagar_agua` e `definir_meta_agua` (tabelas `agua` e `config`;
+aparece também em `resumo_hoje` e em `ver_refeicoes`, à parte da comida e do `agua_pct` da balança).
+
 Refeições: `buscar_alimento`, `cadastrar_alimento`, `registrar_refeicao`, `ver_refeicoes` e `apagar_refeicao`.
 A tabela `alimentos` vem com a **TACO 4ª edição** (NEPA/Unicamp, 597 alimentos, valores por 100 g, nomes como na
 tabela; extraída da planilha oficial para `worker/src/taco.json` e carregada no Turso na primeira chamada).

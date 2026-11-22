@@ -29,6 +29,20 @@ import { abrir, COLUNAS_ATIVIDADE, COLUNAS_MEDICAO, inserirMedicoes, lerAtividad
 import { GitHubHandler } from "./github-handler.ts";
 import { buscar, somar, TIPOS_REFEICAO, NUTRIENTES } from "./nutricao.ts";
 import {
+	aguaDoDia,
+	aguaPorId,
+	apagarAgua,
+	gravarMeta,
+	lerAgua,
+	lerMeta,
+	META_MAX,
+	META_MIN,
+	ML_MAX_REGISTRO,
+	registrarAgua,
+	situacaoMeta,
+	somarAguaPorDia,
+} from "./agua.ts";
+import {
 	apagarRefeicao,
 	cadastrarAlimento,
 	calcularItens,
@@ -645,7 +659,7 @@ function createServer() {
 		{
 			description:
 				"Lista as refeições do período (mais recentes primeiro) com itens, gramas e valores, o total de cada refeição, " +
-				"o total de cada dia e a média por dia (só dias com refeição registrada). Só leitura.",
+				"o total de cada dia (com a água ingerida no dia em agua_ml, à parte da comida) e a média por dia (só dias com refeição registrada). Só leitura.",
 			inputSchema: z.object({ periodo: PERIODO }),
 			annotations: { readOnlyHint: true, openWorldHint: false },
 		},
@@ -675,7 +689,8 @@ function createServer() {
 						};
 					})
 					.sort((a, b) => (a.data_hora < b.data_hora ? 1 : -1));
-				const dias = await nutricaoPorDia(db, p.inicio, p.fim);
+				const [dias, regsAgua] = await Promise.all([nutricaoPorDia(db, p.inicio, p.fim), lerAgua(db, p.inicio, p.fim)]);
+				const aguaDia = new Map(somarAguaPorDia(regsAgua).map((d) => [d.data, d.total_ml]));
 				const med = (k: keyof (typeof dias)[number]) => arred(media(dias.map((d) => d[k] as number)), k === "kcal_consumidas" ? 0 : 1);
 				return json({
 					periodo: p,
@@ -684,7 +699,8 @@ function createServer() {
 					media_por_dia: dias.length
 						? { kcal: med("kcal_consumidas"), proteina_g: med("proteina_g"), carbo_g: med("carbo_g"), gordura_g: med("gordura_g"), fibra_g: med("fibra_g") }
 						: null,
-					totais_por_dia: [...dias].reverse(),
+					// agua_ml = água ingerida no dia (registrar_agua); não entra nos totais da comida.
+					totais_por_dia: [...dias].reverse().map((d) => ({ ...d, agua_ml: aguaDia.get(d.data) ?? 0 })),
 					refeicoes,
 				});
 			} catch (e) {
@@ -726,11 +742,120 @@ function createServer() {
 		},
 	);
 
+	// ── Água ingerida ──────────────────────────────────────────────────────
+
+	server.registerTool(
+		"registrar_agua",
+		{
+			description:
+				`Registra água bebida, em ml (inteiro de 1 a ${ML_MAX_REGISTRO} por registro; ex.: copo 250, garrafa 500). ` +
+				"data_hora padrão = agora (Brasília). Devolve o registro gravado, o total do dia e, se houver meta (definir_meta_agua), " +
+				"quanto falta. É a água ingerida: não tem relação com agua_pct da balança (% de água corporal).",
+			inputSchema: z.object({
+				ml: z.number().int().min(1).max(ML_MAX_REGISTRO).describe("Quantidade em ml."),
+				data_hora: z.string().max(19).optional().describe('"AAAA-MM-DD HH:MM" no horário de Brasília. Padrão: agora.'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+		},
+		async ({ ml, data_hora }) => {
+			try {
+				const agora = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 19).replace("T", " ");
+				const quando = data_hora ? normalizarDataHora(data_hora) : agora;
+				const db = await abrir(env);
+				const reg = await registrarAgua(db, quando, ml);
+				return json({ gravado: true, registro: reg, total_dia: await aguaDoDia(db, quando.slice(0, 10)) });
+			} catch (e) {
+				return falha(e);
+			}
+		},
+	);
+
+	server.registerTool(
+		"ver_agua",
+		{
+			description:
+				"Lista a água ingerida no período (mais recentes primeiro), o total de cada dia e a média por dia (só dias com registro). " +
+				"Se houver meta (definir_meta_agua), diz em quantos dias ela foi batida. Só leitura.",
+			inputSchema: z.object({ periodo: PERIODO }),
+			annotations: { readOnlyHint: true, openWorldHint: false },
+		},
+		async ({ periodo }) => {
+			try {
+				const p = lerPeriodo(periodo ?? "7d");
+				const db = await abrir(env);
+				const [regs, meta] = await Promise.all([lerAgua(db, p.inicio, p.fim), lerMeta(db)]);
+				const dias = somarAguaPorDia(regs);
+				const mediaDia = media(dias.map((d) => d.total_ml));
+				return json({
+					periodo: p,
+					meta_ml: meta ?? undefined,
+					registros_no_periodo: regs.length,
+					dias_com_registro: dias.length,
+					media_por_dia_ml: mediaDia === null ? null : Math.round(mediaDia),
+					dias_meta_batida: meta === null ? undefined : dias.filter((d) => d.total_ml >= meta).length,
+					totais_por_dia: [...dias].reverse().map((d) => ({ ...d, ...(situacaoMeta(d.total_ml, meta) ?? {}) })),
+					registros: [...regs].reverse(),
+				});
+			} catch (e) {
+				return falha(e);
+			}
+		},
+	);
+
+	server.registerTool(
+		"apagar_agua",
+		{
+			description:
+				"Apaga UM registro de água pelo id. Sem confirmar = true só mostra o que seria apagado. " +
+				"Mostre o registro ao usuário e peça confirmação antes de chamar com confirmar = true.",
+			inputSchema: z.object({
+				id: z.number().int().positive(),
+				confirmar: z.boolean().optional().describe("true para apagar de verdade."),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+		},
+		async ({ id, confirmar }) => {
+			try {
+				const db = await abrir(env);
+				const reg = await aguaPorId(db, id);
+				if (!reg) return json({ apagado: false, motivo: `Registro de água ${id} não existe.` });
+				if (!confirmar) return json({ apagado: false, seria_apagado: reg, aviso: "Chame de novo com confirmar = true para apagar." });
+				await apagarAgua(db, id);
+				return json({ apagado: true, registro_apagado: reg, total_dia: await aguaDoDia(db, reg.data_hora.slice(0, 10)) });
+			} catch (e) {
+				return falha(e);
+			}
+		},
+	);
+
+	server.registerTool(
+		"definir_meta_agua",
+		{
+			description:
+				`Define a meta diária de água em ml (inteiro de ${META_MIN} a ${META_MAX}). Substitui a meta anterior. ` +
+				"Com meta, registrar_agua, ver_agua e resumo_hoje mostram quanto falta e se a meta foi batida; sem meta, não mostram.",
+			inputSchema: z.object({
+				ml: z.number().int().min(META_MIN).max(META_MAX).describe("Meta diária em ml, ex.: 2500."),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+		},
+		async ({ ml }) => {
+			try {
+				const db = await abrir(env);
+				const r = await gravarMeta(db, ml);
+				return json({ gravado: true, meta_ml: r.atual, meta_anterior_ml: r.anterior, hoje: await aguaDoDia(db, hojeBRT()) });
+			} catch (e) {
+				return falha(e);
+			}
+		},
+	);
+
 	server.registerTool(
 		"resumo_hoje",
 		{
 			description:
-				"Painel rápido: última medição da balança (com variação vs. a anterior e vs. ~30 dias atrás) e a atividade de hoje e de ontem. Só leitura.",
+				"Painel rápido: última medição da balança (com variação vs. a anterior e vs. ~30 dias atrás), a atividade de hoje e de ontem " +
+					"e a água ingerida hoje (total, meta e quanto falta, se houver meta). Só leitura.",
 			inputSchema: z.object({}),
 			annotations: { readOnlyHint: true, openWorldHint: false },
 		},
@@ -771,6 +896,7 @@ function createServer() {
 					medicao_de_30_dias_atras: ha30 ? ha30.medido_em : null,
 					hoje: fmt(dia(hoje)) ?? null,
 					ontem: fmt(dia(somarDias(hoje, -1))) ?? null,
+					agua_hoje: await aguaDoDia(db, hoje),
 				});
 			} catch (e) {
 				return falha(e);
