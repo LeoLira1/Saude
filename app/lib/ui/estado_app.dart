@@ -157,7 +157,13 @@ class EstadoApp extends ChangeNotifier {
   }
 
   Future<void> _salvar(Medicao m) async {
-    if (!arm.adicionarMedicao(m)) return;
+    if (!arm.adicionarMedicao(m)) {
+      // Repetição da balança: não salva e não pergunta de novo.
+      arm.recusar(m.medidoEm);
+      ServicoBalanca.instancia.marcarVistas([m.medidoEm]);
+      await arm.salvar();
+      return;
+    }
     ServicoBalanca.instancia.marcarVistas([m.medidoEm]);
     salvaAgora = m.medidoEm;
     await arm.salvar();
@@ -193,10 +199,15 @@ class EstadoApp extends ChangeNotifier {
   }
 
   // ── Dados para as telas ──────────────────────────────────────────────────
-  List<Medicao> get medicoes => arm.medicoes;
+  /// Sem as repetições da balança (peso e impedância idênticos em até 30 min).
+  List<Medicao> get medicoes => arm.medicoesDistintas;
 
-  Medicao? get ultima => arm.ultimaMedicao;
+  Medicao? get ultima {
+    final l = medicoes;
+    return l.isEmpty ? null : l.last;
+  }
 
+  /// A medição imediatamente anterior à última (já sem repetições).
   Medicao? get anterior {
     final l = medicoes;
     return l.length < 2 ? null : l[l.length - 2];

@@ -81,8 +81,11 @@ String horasMin(num? min) {
 }
 
 /// "+0,4" / "−1,2" com sinal.
+/// Arredonda só aqui, depois da subtração (0,0999… → +0,1).
 String delta(num? v, [int casas = 1]) {
   if (v == null) return '—';
-  if (v.abs() < 0.05) return '0,0';
-  return '${v > 0 ? '+' : '−'}${num1(v.abs(), casas)}';
+  final f = casas == 0 ? 1 : (casas == 1 ? 10 : 100);
+  final r = (v * f).round() / f;
+  if (r == 0) return num1(0, casas);
+  return '${r > 0 ? '+' : '−'}${num1(r.abs(), casas)}';
 }

@@ -58,6 +58,23 @@ class Armazenamento {
     return l;
   }
 
+  /// [m] repete [anterior]: peso e impedância idênticos e [anterior] até 30 min antes.
+  static bool ehRepeticao(Medicao m, Medicao anterior) {
+    if (m.peso != anterior.peso || m.impedancia != anterior.impedancia) return false;
+    final dif = m.data.difference(anterior.data);
+    return !dif.isNegative && dif <= const Duration(minutes: 30) && m.medidoEm != anterior.medidoEm;
+  }
+
+  /// Medições sem as repetições da balança (para telas e comparações).
+  List<Medicao> get medicoesDistintas {
+    final r = <Medicao>[];
+    for (final m in medicoes) {
+      if (m.origem != 'manual' && r.any((x) => ehRepeticao(m, x))) continue;
+      r.add(m);
+    }
+    return r;
+  }
+
   Medicao? get ultimaMedicao {
     final l = medicoes;
     return l.isEmpty ? null : l.last;
@@ -69,10 +86,12 @@ class Armazenamento {
         ...((_dados['recusadas'] as List?) ?? const []).map((e) => '$e'),
       };
 
-  /// Guarda a medição e põe na fila de envio. Devolve false se já existia.
+  /// Guarda a medição e põe na fila de envio. Devolve false se já existia ou se é
+  /// repetição da balança (mesma regra do servidor: peso e impedância idênticos nos 30 min anteriores).
   bool adicionarMedicao(Medicao m) {
     final lista = ((_dados['medicoes'] as List?) ?? []).cast<dynamic>().toList();
     if (lista.any((e) => (e as Map)['medido_em'] == m.medidoEm)) return false;
+    if (m.origem != 'manual' && medicoes.any((x) => ehRepeticao(m, x))) return false;
     lista.add(m.toJson());
     _dados['medicoes'] = lista;
     final fila = filaMedicoes.toList()..add(m.medidoEm);
