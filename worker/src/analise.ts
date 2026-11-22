@@ -2,7 +2,7 @@
  * Funções puras (sem banco) usadas pelas ferramentas do MCP.
  * Datas no fuso de Brasília (UTC-3, sem horário de verão desde 2019), sempre "AAAA-MM-DD".
  */
-import type { Atividade, Medicao } from "./db.ts";
+import { COLUNAS_MEDICAO, type Atividade, type Medicao } from "./db.ts";
 
 // ── Datas ───────────────────────────────────────────────────────────────────
 
@@ -378,4 +378,83 @@ export function maisProxima(medicoes: Medicao[], data: string, tolerancia = 3): 
 		}
 	}
 	return melhor;
+}
+
+// ── Medição do dia e impedância suspeita ────────────────────────────────────
+
+/**
+ * Média das medições de um dia, como o ver_evolucao faz.
+ * Se o dia não tem medição, usa o dia mais próximo com medição (até `tolerancia` dias; empate: o dia anterior)
+ * e diz qual foi em `data_real_medicao`.
+ */
+export function medicaoDoDia(medicoes: Medicao[], data: string, tolerancia = 3) {
+	const porDia = new Map<string, Medicao[]>();
+	for (const m of medicoes) {
+		const d = m.medido_em.slice(0, 10);
+		porDia.set(d, [...(porDia.get(d) ?? []), m]);
+	}
+	let dia: string | null = porDia.has(data) ? data : null;
+	if (!dia) {
+		for (let k = 1; k <= tolerancia && !dia; k++) {
+			if (porDia.has(somarDias(data, -k))) dia = somarDias(data, -k);
+			else if (porDia.has(somarDias(data, k))) dia = somarDias(data, k);
+		}
+	}
+	if (!dia) return null;
+	const lista = [...porDia.get(dia)!].sort((a, b) => (a.medido_em < b.medido_em ? -1 : 1));
+	const mediaDia: Record<string, number> = {};
+	for (const c of COLUNAS_MEDICAO) {
+		const v = media(lista.map((m) => m[c]).filter((x): x is number => typeof x === "number" && Number.isFinite(x)));
+		if (v !== null) mediaDia[c] = c === "impedancia" ? Math.round(v) : (arred(v, 2) as number);
+	}
+	return {
+		data_real_medicao: dia,
+		mesmo_dia: dia === data,
+		distancia_dias: diasEntre(data, dia),
+		medicoes_no_dia: lista.length,
+		horarios: lista.map((m) => m.medido_em.slice(11, 16)),
+		ids: lista.map((m) => m.id).filter((x) => x !== undefined),
+		media_do_dia: mediaDia,
+	};
+}
+
+/** Métricas calculadas a partir da impedância (bioimpedância). */
+export const METRICAS_DE_IMPEDANCIA = new Set(["gordura_pct", "musculo_kg", "agua_pct", "osso_kg", "proteina_pct", "impedancia"]);
+export const LIMIAR_IMPEDANCIA_OHMS = 30;
+
+export type Suspeita = {
+	id?: number;
+	medido_em: string;
+	impedancia: number;
+	medido_em_anterior: string;
+	impedancia_anterior: number;
+	diferenca_ohms: number;
+};
+
+/**
+ * Medições cuja impedância varia mais de 30 Ω em relação à medição anterior do MESMO dia
+ * (ex.: pé molhado, meia, posição diferente). Gordura, músculo e água dela ficam duvidosos.
+ */
+export function medicoesSuspeitas(medicoes: Medicao[], limiar = LIMIAR_IMPEDANCIA_OHMS): Suspeita[] {
+	const ord = medicoes
+		.filter((m) => typeof m.impedancia === "number" && m.impedancia! > 0)
+		.sort((a, b) => (a.medido_em < b.medido_em ? -1 : 1));
+	const r: Suspeita[] = [];
+	for (let i = 1; i < ord.length; i++) {
+		const ant = ord[i - 1];
+		const m = ord[i];
+		if (ant.medido_em.slice(0, 10) !== m.medido_em.slice(0, 10)) continue;
+		const dif = m.impedancia! - ant.impedancia!;
+		if (Math.abs(dif) > limiar) {
+			r.push({
+				id: m.id,
+				medido_em: m.medido_em,
+				impedancia: m.impedancia!,
+				medido_em_anterior: ant.medido_em,
+				impedancia_anterior: ant.impedancia!,
+				diferenca_ohms: dif,
+			});
+		}
+	}
+	return r;
 }

@@ -12,7 +12,10 @@ import {
 	horas,
 	lerMetrica,
 	lerPeriodo,
-	maisProxima,
+	medicaoDoDia,
+	medicoesSuspeitas,
+	METRICAS_DE_IMPEDANCIA,
+	LIMIAR_IMPEDANCIA_OHMS,
 	media,
 	METRICAS,
 	resumoSerie,
@@ -20,7 +23,7 @@ import {
 	serieDiaria,
 	somarDias,
 } from "./analise.ts";
-import { abrir, COLUNAS_ATIVIDADE, COLUNAS_MEDICAO, inserirMedicoes, lerAtividade, lerMedicoes, linhas } from "./db.ts";
+import { abrir, COLUNAS_ATIVIDADE, COLUNAS_MEDICAO, inserirMedicoes, lerAtividade, lerMedicoes, linhas, type Medicao } from "./db.ts";
 import { GitHubHandler } from "./github-handler.ts";
 import type { Props } from "./utils.ts";
 import { ErroValidacao, normalizarDataHora, validarMedicao } from "./validar.ts";
@@ -52,6 +55,20 @@ function enxuta(m: Record<string, unknown>) {
 	return o;
 }
 
+/** Bônus: marca medições com impedância > 30 Ω diferente da anterior do mesmo dia (só nas métricas de bioimpedância). */
+function comSuspeitas<T extends object>(chave: string, resumo: T, ms: Medicao[]) {
+	if (!METRICAS_DE_IMPEDANCIA.has(chave)) return resumo;
+	const sus = medicoesSuspeitas(ms);
+	if (!sus.length) return resumo;
+	return {
+		...resumo,
+		medicoes_suspeitas: sus,
+		aviso_suspeitas:
+			`${sus.length} medição(ões) com impedância variando mais de ${LIMIAR_IMPEDANCIA_OHMS} Ω em relação à anterior do mesmo dia: ` +
+			"gordura, músculo e água delas podem estar errados (pé molhado, meia, posição). Os valores acima ainda as incluem.",
+	};
+}
+
 function createServer() {
 	const server = new McpServer({ name: "Saúde", version: "1.0.0" });
 
@@ -72,7 +89,17 @@ function createServer() {
 				const p = lerPeriodo(periodo);
 				const db = await abrir(env);
 				const ms = (await lerMedicoes(db, p.inicio, p.fim)).reverse();
-				return json({ periodo: p, total: ms.length, medicoes: ms.slice(0, limite ?? 100).map(enxuta) });
+				const sus = new Map(medicoesSuspeitas(ms).map((x) => [x.medido_em, x]));
+				return json({
+					periodo: p,
+					total: ms.length,
+					medicoes: ms.slice(0, limite ?? 100).map((m) => {
+						const x = sus.get(m.medido_em);
+						return x
+							? { ...enxuta(m), suspeita: true, motivo_suspeita: `impedância ${x.diferenca_ohms > 0 ? "+" : ""}${x.diferenca_ohms} Ω vs. ${x.medido_em_anterior.slice(11, 16)}` }
+							: enxuta(m);
+					}),
+				});
 			} catch (e) {
 				return falha(e);
 			}
@@ -104,7 +131,7 @@ function createServer() {
 				const casas = info.unidade === "kg" || info.unidade === "%" ? 2 : 0;
 				return json({
 					periodo: p,
-					resumo: resumoSerie(info, serie),
+					resumo: comSuspeitas(info.chave, resumoSerie(info, serie), ms),
 					serie: serie.map((s) => ({ data: s.data, valor: arred(s.valor, casas) })),
 				});
 			} catch (e) {
@@ -136,7 +163,7 @@ function createServer() {
 					periodo: p,
 					medicoes_no_periodo: ms.length,
 					dias_de_atividade: at.length,
-					metricas: infos.map((i) => resumoSerie(i, serieDiaria(i, ms, at))),
+					metricas: infos.map((i) => comSuspeitas(i.chave, resumoSerie(i, serieDiaria(i, ms, at)), ms)),
 				});
 			} catch (e) {
 				return falha(e);
@@ -148,8 +175,9 @@ function createServer() {
 		"comparar_datas",
 		{
 			description:
-				"Compara duas datas: a medição da balança mais próxima de cada uma (até 3 dias de distância) e a atividade/sono do dia, " +
-				"com a diferença (data2 − data1) de cada métrica. Só leitura.",
+				"Compara duas datas. Balança: média das medições do próprio dia (igual ao ver_evolucao); se o dia não tem medição, usa o dia " +
+				"mais próximo até 3 dias e informa em data_real_medicao. Se as duas datas caem no mesmo dia de medição, não calcula diferença " +
+				"(\"sem medição distinta para comparar\"). Também compara a atividade/sono de cada data. Diferença = data2 − data1. Só leitura.",
 			inputSchema: z.object({
 				data1: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("Primeira data, AAAA-MM-DD."),
 				data2: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("Segunda data, AAAA-MM-DD."),
@@ -164,25 +192,71 @@ function createServer() {
 						lerMedicoes(db, somarDias(d, -3), somarDias(d, 3)),
 						lerAtividade(db, d, d),
 					]);
-					return { medicao: maisProxima(ms, d), atividade: at[0] ?? null };
+					const dia = medicaoDoDia(ms, d);
+					const sus = dia ? medicoesSuspeitas(ms).filter((x) => x.medido_em.startsWith(dia.data_real_medicao)) : [];
+					return { dia, atividade: at[0] ?? null, suspeitas: sus };
 				};
 				const [a, b] = await Promise.all([pega(data1), pega(data2)]);
-				const dif: Record<string, number | null> = {};
-				for (const c of COLUNAS_MEDICAO) {
-					const x = a.medicao?.[c];
-					const y = b.medicao?.[c];
-					if (typeof x === "number" && typeof y === "number") dif[c] = arred(y - x, 2);
+				const avisos: string[] = [];
+				const mesmaData = data1 === data2;
+				const mesmaMedicao = !!a.dia && !!b.dia && a.dia.data_real_medicao === b.dia.data_real_medicao;
+
+				let difMed: Record<string, number | null> | null = null;
+				if (mesmaData || mesmaMedicao) {
+					avisos.push(
+						`sem medição distinta para comparar (as duas datas usam a medição de ${a.dia?.data_real_medicao ?? data1}).`,
+					);
+				} else if (a.dia && b.dia) {
+					difMed = {};
+					for (const c of COLUNAS_MEDICAO) {
+						const x = a.dia.media_do_dia[c];
+						const y = b.dia.media_do_dia[c];
+						if (typeof x === "number" && typeof y === "number") difMed[c] = arred(y - x, 2);
+					}
+				} else {
+					avisos.push("Sem medição da balança até 3 dias de uma das datas.");
 				}
-				for (const c of COLUNAS_ATIVIDADE) {
-					const x = a.atividade?.[c];
-					const y = b.atividade?.[c];
-					if (typeof x === "number" && typeof y === "number") dif[c] = arred(y - x, 1);
+
+				let difAt: Record<string, number | null> | null = null;
+				if (!mesmaData && a.atividade && b.atividade) {
+					difAt = {};
+					for (const c of COLUNAS_ATIVIDADE) {
+						const x = a.atividade[c];
+						const y = b.atividade[c];
+						if (typeof x === "number" && typeof y === "number") difAt[c] = arred(y - x, 1);
+					}
 				}
+				for (const [rot, lado] of [["data1", a], ["data2", b]] as const) {
+					if (lado.dia && !lado.dia.mesmo_dia) {
+						avisos.push(`${rot}: sem medição no dia; usada a de ${lado.dia.data_real_medicao}.`);
+					}
+					if (lado.suspeitas.length) {
+						avisos.push(
+							`${rot}: ${lado.suspeitas.length} medição(ões) do dia com impedância variando mais de ${LIMIAR_IMPEDANCIA_OHMS} Ω; ` +
+								"gordura/músculo/água da média podem estar distorcidos.",
+						);
+					}
+				}
+
+				const lado = (d: string, x: typeof a) => ({
+					data: d,
+					data_real_medicao: x.dia?.data_real_medicao ?? null,
+					medicao: x.dia
+						? {
+								medicoes_no_dia: x.dia.medicoes_no_dia,
+								horarios: x.dia.horarios,
+								media_do_dia: x.dia.media_do_dia,
+								...(x.suspeitas.length ? { medicoes_suspeitas: x.suspeitas } : {}),
+							}
+						: null,
+					atividade: x.atividade && enxuta(x.atividade),
+				});
+
 				return json({
-					data1: { data: data1, medicao: a.medicao && enxuta(a.medicao), atividade: a.atividade && enxuta(a.atividade) },
-					data2: { data: data2, medicao: b.medicao && enxuta(b.medicao), atividade: b.atividade && enxuta(b.atividade) },
-					diferenca_data2_menos_data1: dif,
-					aviso: !a.medicao || !b.medicao ? "Sem medição da balança até 3 dias de uma das datas." : undefined,
+					data1: lado(data1, a),
+					data2: lado(data2, b),
+					diferenca_data2_menos_data1: difMed || difAt ? { medicao: difMed, atividade: difAt } : null,
+					avisos: avisos.length ? avisos : undefined,
 				});
 			} catch (e) {
 				return falha(e);
