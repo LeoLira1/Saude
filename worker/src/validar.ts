@@ -41,13 +41,13 @@ function numero(v: unknown, campo: string, [min, max]: [number, number]): number
 }
 
 /** "2026-11-22T07:15" / "2026-11-22 07:15:03" → "2026-11-22 07:15:03" (horário local de Brasília). */
-export function normalizarDataHora(v: unknown): string {
+export function normalizarDataHora(v: unknown, campo = "medido_em"): string {
 	if (typeof v !== "string" || !RE_DATA_HORA.test(v.trim())) {
-		throw new ErroValidacao(`medido_em deve ser "AAAA-MM-DD HH:MM:SS" (recebi ${JSON.stringify(v)})`);
+		throw new ErroValidacao(`${campo} deve ser "AAAA-MM-DD HH:MM" ou "AAAA-MM-DD HH:MM:SS" (recebi ${JSON.stringify(v)})`);
 	}
 	const s = v.trim().replace("T", " ");
 	const comSeg = s.length === 16 ? `${s}:00` : s;
-	if (Number.isNaN(Date.parse(comSeg.replace(" ", "T") + "Z"))) throw new ErroValidacao(`medido_em inválido: ${v}`);
+	if (Number.isNaN(Date.parse(comSeg.replace(" ", "T") + "Z"))) throw new ErroValidacao(`${campo} inválido: ${v}`);
 	return comSeg;
 }
 

@@ -626,7 +626,7 @@ function createServer() {
 		async ({ tipo, data_hora, observacao, itens }) => {
 			try {
 				const agora = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 19).replace("T", " ");
-				const quando = data_hora ? normalizarDataHora(data_hora) : agora;
+				const quando = data_hora ? normalizarDataHora(data_hora, "data_hora") : agora;
 				const db = await abrir(env);
 				await garantirTaco(db);
 				const calculados = await calcularItens(db, itens);
@@ -760,7 +760,7 @@ function createServer() {
 		async ({ ml, data_hora }) => {
 			try {
 				const agora = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 19).replace("T", " ");
-				const quando = data_hora ? normalizarDataHora(data_hora) : agora;
+				const quando = data_hora ? normalizarDataHora(data_hora, "data_hora") : agora;
 				const db = await abrir(env);
 				const reg = await registrarAgua(db, quando, ml);
 				return json({ gravado: true, registro: reg, total_dia: await aguaDoDia(db, quando.slice(0, 10)) });
