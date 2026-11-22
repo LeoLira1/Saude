@@ -23,7 +23,8 @@ class Sincronizacao {
 
   ApiSaude get _api => ApiSaude(arm.apiUrl, arm.apiKey);
 
-  Future<ResultadoSinc> tudo({bool lerSaude = true, bool segundoPlano = false}) async {
+  /// [origem]: noturna, reserva diária, ao abrir, ao sair, manual. Fica registrada para os Ajustes.
+  Future<ResultadoSinc> tudo({bool lerSaude = true, String? origem}) async {
     final r = ResultadoSinc();
     if (lerSaude) {
       try {
@@ -50,14 +51,14 @@ class Sincronizacao {
     }
     await arm.salvar();
     await enviarPendentes(r);
-    if (segundoPlano) {
-      arm.statusSegundoPlano = {
-        'quando': DateTime.now().toIso8601String(),
-        'ok': r.saudeOk && r.erro == null,
-        'dias_lidos': r.diasLidos,
-        'dias_enviados': r.diasEnviados,
-        'erro': r.erro,
-      };
+    if (origem != null) {
+      arm.registrarSinc(
+        origem: origem,
+        ok: r.saudeOk && r.erro == null,
+        erro: r.erro,
+        diasLidos: r.diasLidos,
+        diasEnviados: r.diasEnviados,
+      );
     }
     await arm.salvar();
     return r;

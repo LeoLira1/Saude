@@ -179,9 +179,26 @@ class Armazenamento {
   DateTime? get ultimaSincSaude => DateTime.tryParse('${_dados['ultima_sinc_saude']}');
   set ultimaSincSaude(DateTime? d) => _dados['ultima_sinc_saude'] = d?.toIso8601String();
 
-  /// Última execução da sincronização diária em segundo plano (WorkManager).
-  Map<String, dynamic>? get statusSegundoPlano => (_dados['status_segundo_plano'] as Map?)?.cast<String, dynamic>();
-  set statusSegundoPlano(Map<String, dynamic>? v) => _dados['status_segundo_plano'] = v;
+  /// Última sincronização (qualquer origem) e última noturna, para a tela de Ajustes.
+  Map<String, dynamic>? get ultimaSinc => (_dados['ultima_sinc'] as Map?)?.cast<String, dynamic>();
+  Map<String, dynamic>? get ultimaNoturna => (_dados['ultima_noturna'] as Map?)?.cast<String, dynamic>();
+
+  void registrarSinc({required String origem, required bool ok, String? erro, int diasLidos = 0, int diasEnviados = 0}) {
+    final r = {
+      'quando': DateTime.now().toUtc().toIso8601String(),
+      'origem': origem,
+      'ok': ok,
+      'erro': erro,
+      'dias_lidos': diasLidos,
+      'dias_enviados': diasEnviados,
+    };
+    _dados['ultima_sinc'] = r;
+    if (origem == 'noturna') _dados['ultima_noturna'] = r;
+  }
+
+  /// Horário agendado da próxima sincronização das 23:00.
+  DateTime? get proximaNoturna => DateTime.tryParse('${_dados['proxima_noturna']}');
+  set proximaNoturna(DateTime? d) => _dados['proxima_noturna'] = d?.toUtc().toIso8601String();
 
   String? get ultimoErro => _dados['ultimo_erro'] as String?;
   set ultimoErro(String? e) => _dados['ultimo_erro'] = e;

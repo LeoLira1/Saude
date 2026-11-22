@@ -63,7 +63,7 @@ class _TelaInicioState extends State<TelaInicio> {
         final ult = app.ultima;
         return RefreshIndicator(
           color: Cores.ciano,
-          onRefresh: () => app.sincronizar(),
+          onRefresh: () => app.sincronizar(origem: 'manual'),
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             children: [

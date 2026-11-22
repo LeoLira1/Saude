@@ -2,7 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:saude/saude/agregador.dart';
 
 void main() {
-  DateTime t(int dia, int h, [int m = 0]) => DateTime(2026, 11, dia, h, m);
+  DateTime t(int dia, int h, [int m = 0]) => DateTime.utc(2026, 11, dia, h + 3, m); // hora de Brasília
 
   test('sono vai para o dia em que acordou e soma os estágios da sessão', () {
     final sessoes = [Amostra(t(21, 23), t(22, 7))]; // 8 h na cama

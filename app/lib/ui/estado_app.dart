@@ -7,8 +7,10 @@ import '../balanca/servico_balanca.dart';
 import '../core/composicao.dart';
 import '../core/mi_scale_parser.dart';
 import '../data/armazenamento.dart';
+import '../data/background.dart';
 import '../data/modelos.dart';
 import '../data/sincronizacao.dart';
+import '../saude/agregador.dart';
 import '../saude/health_sync.dart';
 
 /// Estado do app inteiro (um só, criado no main).
@@ -100,15 +102,30 @@ class EstadoApp extends ChangeNotifier {
     notifyListeners();
     await verificarPermissoes();
     await ligarBalanca();
-    unawaited(sincronizar());
+    unawaited(sincronizar(origem: 'ao abrir'));
+    unawaited(agendarNoturna(arm).catchError((_) {}));
   }
 
-  Future<void> sincronizar({bool lerSaude = true}) async {
+  DateTime? _ultimaAoSair;
+
+  /// App foi para segundo plano: pede ao WorkManager uma sincronização logo em seguida
+  /// (no máximo 1 a cada 2 minutos, para não repetir quando você entra e sai rápido).
+  Future<void> aoSair() async {
+    await desligarBalanca();
+    final agora = DateTime.now();
+    if (_ultimaAoSair != null && agora.difference(_ultimaAoSair!) < const Duration(minutes: 2)) return;
+    _ultimaAoSair = agora;
+    try {
+      await agendarAoSair();
+    } catch (_) {}
+  }
+
+  Future<void> sincronizar({bool lerSaude = true, String? origem}) async {
     if (sincronizando) return;
     sincronizando = true;
     notifyListeners();
     try {
-      final r = await Sincronizacao(arm).tudo(lerSaude: lerSaude && hcPermissao);
+      final r = await Sincronizacao(arm).tudo(lerSaude: lerSaude && hcPermissao, origem: lerSaude ? origem : null);
       avisoSinc = r.erro;
     } catch (e) {
       avisoSinc = '$e';
@@ -209,7 +226,7 @@ class EstadoApp extends ChangeNotifier {
     await Permission.activityRecognition.request();
     await hs.pedirPermissao();
     await verificarPermissoes();
-    if (hcPermissao) await sincronizar();
+    if (hcPermissao) await sincronizar(origem: 'manual');
   }
 
   // ── Dados para as telas ──────────────────────────────────────────────────
@@ -239,10 +256,7 @@ class EstadoApp extends ChangeNotifier {
     return r;
   }
 
-  AtividadeDia? atividadeDe(DateTime d) {
-    final k = '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-    return arm.atividade[k];
-  }
+  AtividadeDia? atividadeDe(DateTime d) => arm.atividade[dataBrasilia(d)];
 
   int get pendentes => arm.filaMedicoes.length + arm.atividadePendente().length;
 }

@@ -7,20 +7,21 @@ import 'package:saude/saude/agregador.dart';
 
 void main() {
   group('B: quantos dias reler', () {
-    final agora = DateTime(2026, 11, 22, 10);
+    DateTime b(int m, int d, int h, [int min = 0]) => DateTime.utc(2026, m, d, h + 3, min); // hora de Brasília
+    final agora = b(11, 22, 10);
     test('primeira vez: 30', () => expect(diasParaLer(null, agora), 30));
     test('sincronizou hoje ou ontem: mínimo 7', () {
-      expect(diasParaLer(DateTime(2026, 11, 22, 8), agora), 7);
-      expect(diasParaLer(DateTime(2026, 11, 21, 23, 50), agora), 7);
+      expect(diasParaLer(b(11, 22, 8), agora), 7);
+      expect(diasParaLer(b(11, 21, 23, 50), agora), 7);
     });
     test('12 dias sem sincronizar: relê 13 (inclui o dia da última, que pode ter ficado incompleto)', () {
-      expect(diasParaLer(DateTime(2026, 11, 10, 9), agora), 13);
+      expect(diasParaLer(b(11, 10, 9), agora), 13);
     });
-    test('mais de 30 dias: limita em 30', () => expect(diasParaLer(DateTime(2026, 9, 1), agora), 30));
+    test('mais de 30 dias: limita em 30', () => expect(diasParaLer(b(9, 1, 12), agora), 30));
   });
 
   group('C: FC de repouso', () {
-    DateTime t(int d, int h) => DateTime(2026, 11, d, h);
+    DateTime t(int d, int h) => DateTime.utc(2026, 11, d, h + 3); // hora de Brasília
     final batimentos = [
       for (var i = 0; i < 40; i++) Amostra(t(21, 8), t(21, 8), 55.0 + i), // dia 21 (encerrado)
       for (var i = 0; i < 40; i++) Amostra(t(22, 8), t(22, 8), 70.0 + i), // dia 22 (hoje, incompleto)
@@ -78,20 +79,26 @@ void main() {
       expect(d.fcRepousoEstimada, isFalse);
     });
 
-    test('status do segundo plano fica salvo', () async {
+    test('registro da última sincronização e da última noturna', () async {
       final a = await Armazenamento.abrir(pasta: dir);
-      a.statusSegundoPlano = {'quando': '2026-11-23T03:10:00', 'ok': false, 'erro': 'Health Connect: STEPS: permissão'};
+      a.registrarSinc(origem: 'noturna', ok: false, erro: 'Health Connect: STEPS: permissão');
+      a.registrarSinc(origem: 'ao abrir', ok: true, diasLidos: 7, diasEnviados: 2);
+      a.proximaNoturna = DateTime.utc(2026, 11, 24, 2);
       await a.salvar();
       final b = await Armazenamento.abrir(pasta: dir);
-      expect(b.statusSegundoPlano!['ok'], isFalse);
-      expect(b.statusSegundoPlano!['erro'], contains('STEPS'));
+      expect(b.ultimaSinc!['origem'], 'ao abrir');
+      expect(b.ultimaSinc!['ok'], isTrue);
+      expect(b.ultimaNoturna!['ok'], isFalse);
+      expect(b.ultimaNoturna!['erro'], contains('STEPS'));
+      expect(b.proximaNoturna, DateTime.utc(2026, 11, 24, 2));
     });
   });
 
   test('D: noite que começou no dia anterior ao primeiro dia lido vai para o dia em que acordou', () {
     // Janela começa em 16/11; a noite começou 15/11 às 23:00 (antes do início). Agora a leitura parte de
     // 15/11 00:00, então a sessão é encontrada e fica em 16/11.
-    final s = agregarSono([Amostra(DateTime(2026, 11, 15, 23), DateTime(2026, 11, 16, 6, 30))], const []);
+    // 23:00 → 06:30 em Brasília
+    final s = agregarSono([Amostra(DateTime.utc(2026, 11, 16, 2), DateTime.utc(2026, 11, 16, 9, 30))], const []);
     expect(s.keys, ['2026-11-16']);
     expect(s['2026-11-16']!.total, 450);
   });

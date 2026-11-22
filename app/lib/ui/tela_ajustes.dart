@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../core/composicao.dart';
 import '../data/api.dart';
+import '../saude/agregador.dart';
 import 'estado_app.dart';
 import 'tema.dart';
 
@@ -177,7 +178,7 @@ class _TelaAjustesState extends State<TelaAjustes> {
             _SegundoPlano(app: app),
             const SizedBox(height: 10),
             OutlinedButton.icon(
-              onPressed: app.sincronizando ? null : () => app.sincronizar(),
+              onPressed: app.sincronizando ? null : () => app.sincronizar(origem: 'manual'),
               icon: const Icon(Icons.sync),
               label: Text(app.sincronizando ? 'Sincronizando…' : 'Sincronizar agora'),
             ),
@@ -221,46 +222,52 @@ class _Secao extends StatelessWidget {
       );
 }
 
-/// Situação da sincronização diária com o app fechado.
+/// Situação da sincronização: última (e origem), última noturna e próxima das 23:00.
 class _SegundoPlano extends StatelessWidget {
   const _SegundoPlano({required this.app});
   final EstadoApp app;
 
-  String _quando(String? iso) {
-    final d = iso == null ? null : DateTime.tryParse(iso);
-    if (d == null) return '';
-    final dd = '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}';
-    return '$dd às ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+  /// "23/11 às 23:04" no horário de Brasília.
+  static String quando(DateTime? d) {
+    if (d == null) return '—';
+    final l = emBrasilia(d);
+    String z(int v) => v.toString().padLeft(2, '0');
+    return '${z(l.day)}/${z(l.month)} às ${z(l.hour)}:${z(l.minute)}';
+  }
+
+  static String linhaSinc(String rotulo, Map<String, dynamic>? st) {
+    if (st == null) return '$rotulo: ainda não houve.';
+    final q = quando(DateTime.tryParse('${st['quando']}'));
+    final origem = st['origem'] ?? '';
+    if (st['ok'] == true) return '$rotulo: $q · $origem · deu certo ✓ (${st['dias_lidos'] ?? 0} dias lidos, ${st['dias_enviados'] ?? 0} enviados)';
+    return '$rotulo: $q · $origem · ERRO: ${st['erro'] ?? 'desconhecido'}';
   }
 
   @override
   Widget build(BuildContext context) {
     if (!app.hcPermissao) return const SizedBox.shrink();
-    final st = app.arm.statusSegundoPlano;
+    final arm = app.arm;
+    final ultima = arm.ultimaSinc;
+    final noturna = arm.ultimaNoturna;
     final String permTxt;
     Widget? botao;
-    var ok = true;
+    var ok = ultima == null || ultima['ok'] == true;
     if (!app.hcSegundoPlanoDisponivel) {
       ok = false;
-      permTxt = 'O Health Connect deste celular não permite ler com o app fechado. '
-          'Atualize o Health Connect na Play Store, ou abra o app Saúde pelo menos 1 vez a cada 7 dias '
-          '(ele recupera os dias que faltaram).';
+      permTxt = 'O Health Connect deste celular não permite ler com o app fechado: a sincronização das 23:00 '
+          'não consegue ler. Atualize o Health Connect na Play Store, ou abra o app pelo menos 1 vez a cada 7 dias.';
     } else if (!app.hcSegundoPlanoAutorizado) {
       ok = false;
-      permTxt = 'Falta liberar "acessar dados em segundo plano" no Health Connect: sem isso, a sincronização diária com o app fechado não lê nada.';
+      permTxt = 'Falta liberar "acessar dados em segundo plano" no Health Connect: sem isso, a sincronização das 23:00 não lê nada.';
       botao = FilledButton.tonal(onPressed: app.pedirSegundoPlano, child: const Text('Liberar'));
     } else {
       permTxt = 'Leitura com o app fechado liberada.';
     }
-    final String execTxt;
-    if (st == null) {
-      execTxt = 'Sincronização diária com o app fechado: ainda não rodou (roda 1x por dia, com internet).';
-    } else if (st['ok'] == true) {
-      execTxt = 'Última sincronização com o app fechado: ${_quando(st['quando'] as String?)} ✓ (${st['dias_lidos'] ?? 0} dias lidos).';
-    } else {
-      ok = false;
-      execTxt = 'Última sincronização com o app fechado: ${_quando(st['quando'] as String?)} — falhou: ${st['erro'] ?? 'erro desconhecido'}';
-    }
+    final linhas = [
+      linhaSinc('Última sincronização', ultima),
+      if (ultima?['origem'] != 'noturna') linhaSinc('Última noturna', noturna),
+      'Próxima noturna (23:00): ${quando(arm.proximaNoturna)}',
+    ];
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(color: Cores.cartao2, borderRadius: BorderRadius.circular(14)),
@@ -268,13 +275,17 @@ class _SegundoPlano extends StatelessWidget {
         Row(children: [
           Icon(ok ? Icons.check_circle : Icons.warning_amber_rounded, size: 18, color: ok ? Cores.verde : Cores.ambar),
           const SizedBox(width: 8),
-          const Expanded(child: Text('Segundo plano', style: TextStyle(fontWeight: FontWeight.w600))),
+          const Expanded(child: Text('Sincronização', style: TextStyle(fontWeight: FontWeight.w600))),
           ?botao,
         ]),
         const SizedBox(height: 6),
         Text(permTxt, style: const TextStyle(color: Cores.suave, fontSize: 12, height: 1.35)),
-        const SizedBox(height: 4),
-        Text(execTxt, style: const TextStyle(color: Cores.suave, fontSize: 12, height: 1.35)),
+        for (final l in linhas) ...[
+          const SizedBox(height: 4),
+          Text(l,
+              style: TextStyle(
+                  color: l.contains('ERRO') ? Cores.rosa : Cores.suave, fontSize: 12, height: 1.35)),
+        ],
       ]),
     );
   }

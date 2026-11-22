@@ -56,8 +56,8 @@ class _CascaState extends State<Casca> with WidgetsBindingObserver {
       await _explicarBluetooth();
     }
     await app.ligarBalanca();
-    unawaited(app.sincronizar());
-    unawaited(agendarSincDiaria().catchError((_) {}));
+    unawaited(app.sincronizar(origem: 'ao abrir'));
+    unawaited(garantirAgendamentos(app.arm).catchError((_) {}));
   }
 
   Future<void> _explicarBluetooth() async {
@@ -86,7 +86,7 @@ class _CascaState extends State<Casca> with WidgetsBindingObserver {
     if (s == AppLifecycleState.resumed) {
       app.aoRetomar();
     } else if (s == AppLifecycleState.paused) {
-      app.desligarBalanca();
+      app.aoSair();
     }
   }
 

@@ -120,9 +120,10 @@ class HealthSync {
     await _configurar();
     erros.clear();
     final agora = DateTime.now();
-    final hoje = DateTime(agora.year, agora.month, agora.day);
+    // Dias sempre no fuso de Brasília: 00:00 de hoje em Brasília, e N−1 dias antes.
+    final hoje = inicioDiaBrasilia(agora);
     final ini = hoje.subtract(Duration(days: dias - 1));
-    final datas = [for (var i = 0; i < dias; i++) dataLocal(ini.add(Duration(days: i)))];
+    final datas = [for (var i = 0; i < dias; i++) dataBrasilia(ini.add(Duration(days: i)))];
 
     // Passos e calorias: agregados do Health Connect (sem contar em dobro quando há mais de um app).
     final passos = <String, int>{};
@@ -131,9 +132,9 @@ class HealthSync {
       final d1 = d0.add(const Duration(days: 1));
       try {
         final n = await _health.getTotalStepsInInterval(d0, d1.isAfter(agora) ? agora : d1);
-        if (n > 0) passos[dataLocal(d0)] = n;
+        if (n > 0) passos[dataBrasilia(d0)] = n;
       } catch (e) {
-        erros.add('STEPS ${dataLocal(d0)}: $e');
+        erros.add('STEPS ${dataBrasilia(d0)}: $e');
       }
     }
     final calorias = <String, double>{};
@@ -145,7 +146,7 @@ class HealthSync {
         interval: 86400,
       );
       for (final p in pts) {
-        final d = dataLocal(p.dateFrom);
+        final d = dataBrasilia(p.dateFrom);
         calorias[d] = (calorias[d] ?? 0) + _num(p);
       }
     } catch (e) {
@@ -184,7 +185,7 @@ class HealthSync {
       fcRepouso: rhr,
       spo2: ox,
       sono: agregarSono(sessoes, estagios),
-      hoje: dataLocal(agora),
+      hoje: dataBrasilia(agora),
     );
   }
 }

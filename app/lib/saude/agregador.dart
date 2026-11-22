@@ -17,9 +17,22 @@ class EstagioSono extends Amostra {
   const EstagioSono(this.estagio, DateTime inicio, DateTime fim) : super(inicio, fim);
 }
 
-String dataLocal(DateTime d) {
-  final l = d.toLocal();
+/// Brasília (America/Sao_Paulo): UTC−3 o ano todo (sem horário de verão desde 2019).
+const fusoBrasilia = Duration(hours: 3);
+
+/// O mesmo instante, com os campos (ano, mês, dia, hora) no relógio de Brasília.
+DateTime emBrasilia(DateTime d) => d.toUtc().subtract(fusoBrasilia);
+
+/// "AAAA-MM-DD" do dia em Brasília a que o instante pertence (não depende do fuso do celular).
+String dataBrasilia(DateTime d) {
+  final l = emBrasilia(d);
   return '${l.year}-${l.month.toString().padLeft(2, '0')}-${l.day.toString().padLeft(2, '0')}';
+}
+
+/// 00:00 em Brasília do dia que contém o instante.
+DateTime inicioDiaBrasilia(DateTime d) {
+  final l = emBrasilia(d);
+  return DateTime.utc(l.year, l.month, l.day).add(fusoBrasilia);
 }
 
 double? _media(Iterable<double> v) {
@@ -52,7 +65,7 @@ Map<String, Noite> agregarSono(List<Amostra> sessoes, List<EstagioSono> estagios
             !e.fim.isAfter(s.fim.add(const Duration(minutes: 1))))
         .toList();
     usados.addAll(dentro);
-    final n = porDia.putIfAbsent(dataLocal(s.fim), Noite.new);
+    final n = porDia.putIfAbsent(dataBrasilia(s.fim), Noite.new);
     double prof = 0, lev = 0, rem = 0, acord = 0, dorm = 0;
     for (final e in dentro) {
       switch (e.estagio) {
@@ -77,7 +90,7 @@ Map<String, Noite> agregarSono(List<Amostra> sessoes, List<EstagioSono> estagios
   }
   // Estágios sem sessão (alguns apps gravam só os estágios): agrupa pelo dia em que terminaram.
   for (final e in estagios.where((e) => !usados.contains(e))) {
-    final n = porDia.putIfAbsent(dataLocal(e.fim), Noite.new);
+    final n = porDia.putIfAbsent(dataBrasilia(e.fim), Noite.new);
     switch (e.estagio) {
       case Estagio.profundo:
         n.profundo += e.minutos;
@@ -110,9 +123,7 @@ double? fcRepousoEstimada(List<double> batimentos) {
 /// incompleto), no mínimo 7 e no máximo 30 (limite do Health Connect sem permissão de histórico).
 int diasParaLer(DateTime? ultimaOk, DateTime agora) {
   if (ultimaOk == null) return 30;
-  final a = DateTime(ultimaOk.year, ultimaOk.month, ultimaOk.day);
-  final h = DateTime(agora.year, agora.month, agora.day);
-  final desde = h.difference(a).inDays + 1;
+  final desde = inicioDiaBrasilia(agora).difference(inicioDiaBrasilia(ultimaOk)).inDays + 1;
   return desde.clamp(7, 30);
 }
 
@@ -131,7 +142,7 @@ List<AtividadeDia> montarDias({
   Map<String, List<double>> porDia(List<Amostra> l) {
     final m = <String, List<double>>{};
     for (final a in l) {
-      m.putIfAbsent(dataLocal(a.inicio), () => []).add(a.valor);
+      m.putIfAbsent(dataBrasilia(a.inicio), () => []).add(a.valor);
     }
     return m;
   }
