@@ -168,8 +168,8 @@ class _TelaAjustesState extends State<TelaAjustes> {
             ]),
             const SizedBox(height: 10),
             const Text(
-              'No app Mi Fitness: Perfil (Eu) → Configurações → Contas de terceiros / Conectar outros apps → '
-              'Health Connect → ative e libere todas as categorias. '
+              'No app Mi Fitness: Perfil → Dados de terceiros → Health Connect → libere todas as categorias '
+              '(passos, calorias, frequência cardíaca, oxigênio no sangue e sono). '
               'O Mi Fitness grava lá e este app só lê; a pulseira continua pareada com o Mi Fitness.',
               style: TextStyle(color: Cores.suave, fontSize: 12, height: 1.4),
             ),
