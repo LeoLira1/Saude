@@ -161,6 +161,15 @@ export function lerMetrica(texto: string): InfoMetrica & { chave: string } {
 
 export type Ponto = { data: string; valor: number };
 
+/** Casas decimais de cada métrica. Impedância: sempre 1 casa (média de várias medições). */
+export function casasDe(chave: string): number {
+	if (chave === "impedancia") return 1;
+	if (chave === "passos") return 0;
+	const u = METRICAS[chave]?.unidade;
+	if (u === "min" || u === "kcal") return 0;
+	return 2;
+}
+
 export function arred(v: number | null | undefined, casas = 2): number | null {
 	if (v === null || v === undefined || !Number.isFinite(v)) return null;
 	const f = 10 ** casas;
@@ -213,7 +222,7 @@ export function inicioSemana(data: string): string {
 }
 
 export function resumoSerie(info: InfoMetrica & { chave: string }, pontos: Ponto[]) {
-	const casas = info.chave === "passos" ? 0 : info.unidade === "min" || info.unidade === "kcal" ? 0 : 2;
+	const casas = casasDe(info.chave);
 	if (!pontos.length) return { metrica: info.chave, nome: info.nome, unidade: info.unidade, dias_com_dado: 0 };
 	const vs = pontos.map((p) => p.valor);
 	const min = Math.min(...vs);
@@ -241,7 +250,7 @@ export function resumoSerie(info: InfoMetrica & { chave: string }, pontos: Ponto
 		primeiro: { data: pontos[0].data, valor: arred(pontos[0].valor, casas) },
 		ultimo: { data: pontos[pontos.length - 1].data, valor: arred(pontos[pontos.length - 1].valor, casas) },
 		variacao: arred(pontos[pontos.length - 1].valor - pontos[0].valor, casas),
-		tendencia_por_semana: arred(porSemana, info.chave === "passos" ? 0 : 3),
+		tendencia_por_semana: arred(porSemana, info.chave === "passos" ? 0 : info.chave === "impedancia" ? 1 : 3),
 		tendencia: textoTendencia(porSemana, info),
 		medias_semanais: semanal,
 	};
@@ -405,7 +414,7 @@ export function medicaoDoDia(medicoes: Medicao[], data: string, tolerancia = 3) 
 	const mediaDia: Record<string, number> = {};
 	for (const c of COLUNAS_MEDICAO) {
 		const v = media(lista.map((m) => m[c]).filter((x): x is number => typeof x === "number" && Number.isFinite(x)));
-		if (v !== null) mediaDia[c] = c === "impedancia" ? Math.round(v) : (arred(v, 2) as number);
+		if (v !== null) mediaDia[c] = arred(v, casasDe(c)) as number;
 	}
 	return {
 		data_real_medicao: dia,
@@ -426,33 +435,66 @@ export type Suspeita = {
 	id?: number;
 	medido_em: string;
 	impedancia: number;
-	medido_em_anterior: string;
-	impedancia_anterior: number;
+	/** "mediana do dia" ou "mediana dos últimos 7 dias" */
+	referencia: string;
+	medicoes_na_referencia: number;
+	impedancia_referencia: number;
 	diferenca_ohms: number;
 };
 
+export function mediana(vs: number[]): number | null {
+	if (!vs.length) return null;
+	const o = [...vs].sort((a, b) => a - b);
+	const m = Math.floor(o.length / 2);
+	return o.length % 2 ? o[m] : (o[m - 1] + o[m]) / 2;
+}
+
 /**
- * Medições cuja impedância varia mais de 30 Ω em relação à medição anterior do MESMO dia
- * (ex.: pé molhado, meia, posição diferente). Gordura, músculo e água dela ficam duvidosos.
+ * Medições cuja impedância difere mais de 30 Ω da referência:
+ *  - a mediana das impedâncias do MESMO dia (incluindo ela), quando o dia tem 2 ou mais medições;
+ *  - se ela é a única do dia, a mediana das medições dos 7 dias anteriores.
+ * Sem referência (única do dia e nada nos 7 dias antes), não é avaliada.
+ * `historico` deve trazer as medições desde 7 dias antes da primeira de `alvo` (pode incluir `alvo`).
+ * Gordura, músculo e água de uma medição suspeita ficam duvidosos (pé molhado, meia, posição).
  */
-export function medicoesSuspeitas(medicoes: Medicao[], limiar = LIMIAR_IMPEDANCIA_OHMS): Suspeita[] {
-	const ord = medicoes
-		.filter((m) => typeof m.impedancia === "number" && m.impedancia! > 0)
-		.sort((a, b) => (a.medido_em < b.medido_em ? -1 : 1));
+export function medicoesSuspeitas(alvo: Medicao[], historico: Medicao[] = alvo, limiar = LIMIAR_IMPEDANCIA_OHMS): Suspeita[] {
+	const comImp = (l: Medicao[]) => l.filter((m) => typeof m.impedancia === "number" && m.impedancia! > 0);
+	const todas = new Map<string, Medicao>();
+	for (const m of comImp([...historico, ...alvo])) todas.set(m.medido_em, m);
+	const porDia = new Map<string, number[]>();
+	for (const m of todas.values()) {
+		const d = m.medido_em.slice(0, 10);
+		porDia.set(d, [...(porDia.get(d) ?? []), m.impedancia!]);
+	}
 	const r: Suspeita[] = [];
-	for (let i = 1; i < ord.length; i++) {
-		const ant = ord[i - 1];
-		const m = ord[i];
-		if (ant.medido_em.slice(0, 10) !== m.medido_em.slice(0, 10)) continue;
-		const dif = m.impedancia! - ant.impedancia!;
+	for (const m of comImp(alvo).sort((a, b) => (a.medido_em < b.medido_em ? -1 : 1))) {
+		const dia = m.medido_em.slice(0, 10);
+		const doDia = porDia.get(dia) ?? [];
+		let ref: number | null;
+		let referencia: string;
+		let n: number;
+		if (doDia.length >= 2) {
+			ref = mediana(doDia);
+			referencia = "mediana do dia";
+			n = doDia.length;
+		} else {
+			const ant: number[] = [];
+			for (let k = 1; k <= 7; k++) ant.push(...(porDia.get(somarDias(dia, -k)) ?? []));
+			ref = mediana(ant);
+			referencia = "mediana dos últimos 7 dias";
+			n = ant.length;
+		}
+		if (ref === null) continue;
+		const dif = m.impedancia! - ref;
 		if (Math.abs(dif) > limiar) {
 			r.push({
 				id: m.id,
 				medido_em: m.medido_em,
 				impedancia: m.impedancia!,
-				medido_em_anterior: ant.medido_em,
-				impedancia_anterior: ant.impedancia!,
-				diferenca_ohms: dif,
+				referencia,
+				medicoes_na_referencia: n,
+				impedancia_referencia: arred(ref, 1)!,
+				diferenca_ohms: arred(dif, 1)!,
 			});
 		}
 	}

@@ -14,6 +14,7 @@ import {
 	lerPeriodo,
 	medicaoDoDia,
 	medicoesSuspeitas,
+	casasDe,
 	METRICAS_DE_IMPEDANCIA,
 	LIMIAR_IMPEDANCIA_OHMS,
 	media,
@@ -56,17 +57,27 @@ function enxuta(m: Record<string, unknown>) {
 }
 
 /** Bônus: marca medições com impedância > 30 Ω diferente da anterior do mesmo dia (só nas métricas de bioimpedância). */
-function comSuspeitas<T extends object>(chave: string, resumo: T, ms: Medicao[]) {
+function comSuspeitas<T extends object>(chave: string, resumo: T, ms: Medicao[], hist: Medicao[]) {
 	if (!METRICAS_DE_IMPEDANCIA.has(chave)) return resumo;
-	const sus = medicoesSuspeitas(ms);
+	const sus = medicoesSuspeitas(ms, hist);
 	if (!sus.length) return resumo;
 	return {
 		...resumo,
 		medicoes_suspeitas: sus,
 		aviso_suspeitas:
-			`${sus.length} medição(ões) com impedância variando mais de ${LIMIAR_IMPEDANCIA_OHMS} Ω em relação à anterior do mesmo dia: ` +
+			`${sus.length} medição(ões) com impedância a mais de ${LIMIAR_IMPEDANCIA_OHMS} Ω da referência (mediana do dia, ou dos 7 dias anteriores se foi a única do dia): ` +
 			"gordura, músculo e água delas podem estar errados (pé molhado, meia, posição). Os valores acima ainda as incluem.",
 	};
+}
+
+/** Medições do período + as dos 7 dias antes (referência da impedância suspeita). */
+async function lerComHistorico(db: Awaited<ReturnType<typeof abrir>>, inicio: string, fim: string) {
+	const hist = await lerMedicoes(db, somarDias(inicio, -7), fim);
+	return { ms: hist.filter((m) => m.medido_em.slice(0, 10) >= inicio), hist };
+}
+
+function motivoSuspeita(x: { diferenca_ohms: number; referencia: string; impedancia_referencia: number }) {
+	return `impedância ${x.diferenca_ohms > 0 ? "+" : ""}${x.diferenca_ohms} Ω vs. ${x.referencia} (${x.impedancia_referencia} Ω)`;
 }
 
 function createServer() {
@@ -88,15 +99,16 @@ function createServer() {
 			try {
 				const p = lerPeriodo(periodo);
 				const db = await abrir(env);
-				const ms = (await lerMedicoes(db, p.inicio, p.fim)).reverse();
-				const sus = new Map(medicoesSuspeitas(ms).map((x) => [x.medido_em, x]));
+				const { ms: lidas, hist } = await lerComHistorico(db, p.inicio, p.fim);
+				const ms = [...lidas].reverse();
+				const sus = new Map(medicoesSuspeitas(ms, hist).map((x) => [x.medido_em, x]));
 				return json({
 					periodo: p,
 					total: ms.length,
 					medicoes: ms.slice(0, limite ?? 100).map((m) => {
 						const x = sus.get(m.medido_em);
 						return x
-							? { ...enxuta(m), suspeita: true, motivo_suspeita: `impedância ${x.diferenca_ohms > 0 ? "+" : ""}${x.diferenca_ohms} Ω vs. ${x.medido_em_anterior.slice(11, 16)}` }
+							? { ...enxuta(m), suspeita: true, motivo_suspeita: motivoSuspeita(x) }
 							: enxuta(m);
 					}),
 				});
@@ -123,15 +135,15 @@ function createServer() {
 				const info = lerMetrica(metrica);
 				const p = lerPeriodo(periodo);
 				const db = await abrir(env);
-				const [ms, at] = await Promise.all([
-					info.fonte === "medicoes" ? lerMedicoes(db, p.inicio, p.fim) : [],
+				const [{ ms, hist }, at] = await Promise.all([
+					info.fonte === "medicoes" ? lerComHistorico(db, p.inicio, p.fim) : { ms: [], hist: [] },
 					info.fonte === "atividade" ? lerAtividade(db, p.inicio, p.fim) : [],
 				]);
 				const serie = serieDiaria(info, ms, at);
-				const casas = info.unidade === "kg" || info.unidade === "%" ? 2 : 0;
+				const casas = casasDe(info.chave);
 				return json({
 					periodo: p,
-					resumo: comSuspeitas(info.chave, resumoSerie(info, serie), ms),
+					resumo: comSuspeitas(info.chave, resumoSerie(info, serie), ms, hist),
 					serie: serie.map((s) => ({ data: s.data, valor: arred(s.valor, casas) })),
 				});
 			} catch (e) {
@@ -158,12 +170,12 @@ function createServer() {
 				const p = lerPeriodo(periodo);
 				const infos = (metricas?.length ? metricas : METRICAS_RESUMO).map(lerMetrica);
 				const db = await abrir(env);
-				const [ms, at] = await Promise.all([lerMedicoes(db, p.inicio, p.fim), lerAtividade(db, p.inicio, p.fim)]);
+				const [{ ms, hist }, at] = await Promise.all([lerComHistorico(db, p.inicio, p.fim), lerAtividade(db, p.inicio, p.fim)]);
 				return json({
 					periodo: p,
 					medicoes_no_periodo: ms.length,
 					dias_de_atividade: at.length,
-					metricas: infos.map((i) => comSuspeitas(i.chave, resumoSerie(i, serieDiaria(i, ms, at)), ms)),
+					metricas: infos.map((i) => comSuspeitas(i.chave, resumoSerie(i, serieDiaria(i, ms, at)), ms, hist)),
 				});
 			} catch (e) {
 				return falha(e);
@@ -188,12 +200,17 @@ function createServer() {
 			try {
 				const db = await abrir(env);
 				const pega = async (d: string) => {
-					const [ms, at] = await Promise.all([
-						lerMedicoes(db, somarDias(d, -3), somarDias(d, 3)),
+					const [{ ms, hist }, at] = await Promise.all([
+						lerComHistorico(db, somarDias(d, -3), somarDias(d, 3)),
 						lerAtividade(db, d, d),
 					]);
 					const dia = medicaoDoDia(ms, d);
-					const sus = dia ? medicoesSuspeitas(ms).filter((x) => x.medido_em.startsWith(dia.data_real_medicao)) : [];
+					const sus = dia
+						? medicoesSuspeitas(
+								ms.filter((m) => m.medido_em.startsWith(dia.data_real_medicao)),
+								hist,
+							)
+						: [];
 					return { dia, atividade: at[0] ?? null, suspeitas: sus };
 				};
 				const [a, b] = await Promise.all([pega(data1), pega(data2)]);
@@ -211,7 +228,7 @@ function createServer() {
 					for (const c of COLUNAS_MEDICAO) {
 						const x = a.dia.media_do_dia[c];
 						const y = b.dia.media_do_dia[c];
-						if (typeof x === "number" && typeof y === "number") difMed[c] = arred(y - x, 2);
+						if (typeof x === "number" && typeof y === "number") difMed[c] = arred(y - x, casasDe(c));
 					}
 				} else {
 					avisos.push("Sem medição da balança até 3 dias de uma das datas.");
@@ -232,7 +249,7 @@ function createServer() {
 					}
 					if (lado.suspeitas.length) {
 						avisos.push(
-							`${rot}: ${lado.suspeitas.length} medição(ões) do dia com impedância variando mais de ${LIMIAR_IMPEDANCIA_OHMS} Ω; ` +
+							`${rot}: ${lado.suspeitas.length} medição(ões) do dia com impedância a mais de ${LIMIAR_IMPEDANCIA_OHMS} Ω da referência; ` +
 								"gordura/músculo/água da média podem estar distorcidos.",
 						);
 					}
@@ -361,7 +378,7 @@ function createServer() {
 							? null
 							: `cada +1 ${i1.unidade || "un."} de ${i1.nome} ↔ ${arred(inclinacao, 4)} ${i2.unidade || ""} de ${i2.nome}`.trim(),
 					aviso: pares.length < 10 ? "Poucos dias pareados: trate como indício, não conclusão." : undefined,
-					pares: pares.map((x) => ({ data: x.data, [i1.chave]: arred(x.x, 2), [i2.chave]: arred(x.y, 2) })),
+					pares: pares.map((x) => ({ data: x.data, [i1.chave]: arred(x.x, casasDe(i1.chave)), [i2.chave]: arred(x.y, casasDe(i2.chave)) })),
 				});
 			} catch (e) {
 				return falha(e);
