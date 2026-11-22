@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { casasDe, medicaoDoDia, medicoesSuspeitas, mediana, resumoSerie, lerMetrica } from "../src/analise.ts";
+import { avaliarImpedancia, casasDe, medicaoDoDia, medicoesSuspeitas, mediana, resumoSerie, lerMetrica } from "../src/analise.ts";
 
 const ms = [
 	{ id: 1, medido_em: "2026-11-10 07:00:00", peso: 80, impedancia: 500, gordura_pct: 22 },
@@ -41,26 +41,27 @@ test("mediana", () => {
 	assert.equal(mediana([]), null);
 });
 
-test("suspeita: compara com a mediana do dia", () => {
-	// Dia com 577, 577, 622 → mediana 577; só a de 622 (+45) é suspeita.
+test("suspeita: 3+ medições distintas no dia usam a mediana do dia (repetidas contam uma vez)", () => {
+	// Dados reais de 22/11: 577, 577 (pesos diferentes) e 622 duas vezes idêntica → distintas: 577, 577, 622.
 	const dia = [
 		{ id: 1, medido_em: "2026-11-22 13:36:46", peso: 86.35, impedancia: 577 },
 		{ id: 2, medido_em: "2026-11-22 13:37:01", peso: 86.25, impedancia: 577 },
 		{ id: 3, medido_em: "2026-11-22 15:27:52", peso: 86.15, impedancia: 622 },
+		{ id: 4, medido_em: "2026-11-22 15:38:33", peso: 86.15, impedancia: 622 },
 	];
-	const s = medicoesSuspeitas(dia);
-	assert.equal(s.length, 1);
-	assert.equal(s[0].id, 3);
-	assert.equal(s[0].referencia, "mediana do dia");
-	assert.equal(s[0].impedancia_referencia, 577);
-	assert.equal(s[0].diferenca_ohms, 45);
-	assert.equal(s[0].medicoes_na_referencia, 3);
+	const r = avaliarImpedancia(dia);
+	assert.deepEqual(r.suspeitas.map((x) => x.id), [3, 4]);
+	assert.equal(r.suspeitas[0].referencia, "mediana do dia");
+	assert.equal(r.suspeitas[0].impedancia_referencia, 577);
+	assert.equal(r.suspeitas[0].diferenca_ohms, 45);
+	assert.equal(r.suspeitas[0].medicoes_na_referencia, 3);
+	assert.deepEqual(r.historico_insuficiente, []);
 
-	// A PRIMEIRA do dia também pode ser a errada (antes só a posterior era marcada).
+	// A primeira do dia também pode ser a errada.
 	const s2 = medicoesSuspeitas([
 		{ id: 1, medido_em: "2026-11-23 07:00:00", peso: 86, impedancia: 640 },
-		{ id: 2, medido_em: "2026-11-23 07:01:00", peso: 86, impedancia: 580 },
-		{ id: 3, medido_em: "2026-11-23 07:02:00", peso: 86, impedancia: 582 },
+		{ id: 2, medido_em: "2026-11-23 07:01:00", peso: 86.1, impedancia: 580 },
+		{ id: 3, medido_em: "2026-11-23 07:02:00", peso: 86.2, impedancia: 582 },
 	]);
 	assert.deepEqual(s2.map((x) => x.id), [1]);
 	assert.equal(s2[0].diferenca_ohms, 58);
@@ -69,31 +70,43 @@ test("suspeita: compara com a mediana do dia", () => {
 	assert.equal(
 		medicoesSuspeitas([
 			{ medido_em: "2026-11-01 07:00:00", peso: 80, impedancia: 500 },
-			{ medido_em: "2026-11-01 08:00:00", peso: 80, impedancia: 500 },
-			{ medido_em: "2026-11-01 09:00:00", peso: 80, impedancia: 530 },
+			{ medido_em: "2026-11-01 08:00:00", peso: 80.1, impedancia: 500 },
+			{ medido_em: "2026-11-01 09:00:00", peso: 80.2, impedancia: 530 },
 		]).length,
 		0,
 	);
 });
 
-test("suspeita: única do dia compara com a mediana dos 7 dias anteriores", () => {
+test("suspeita: menos de 3 distintas no dia usam a mediana dos 7 dias anteriores", () => {
 	const hist = [
 		{ medido_em: "2026-11-10 07:00:00", peso: 80, impedancia: 500 },
-		{ medido_em: "2026-11-12 07:00:00", peso: 80, impedancia: 505 },
-		{ medido_em: "2026-11-14 07:00:00", peso: 80, impedancia: 510 },
+		{ medido_em: "2026-11-12 07:00:00", peso: 80.1, impedancia: 505 },
+		{ medido_em: "2026-11-14 07:00:00", peso: 80.2, impedancia: 510 },
 		{ medido_em: "2026-11-01 07:00:00", peso: 80, impedancia: 900 }, // mais de 7 dias antes: fora
 	];
-	const alvo = [{ id: 9, medido_em: "2026-11-16 07:00:00", peso: 80, impedancia: 540 }];
-	const s = medicoesSuspeitas(alvo, hist);
-	assert.equal(s.length, 1);
-	assert.equal(s[0].referencia, "mediana dos últimos 7 dias");
-	assert.equal(s[0].impedancia_referencia, 505);
-	assert.equal(s[0].diferenca_ohms, 35);
-	assert.equal(s[0].medicoes_na_referencia, 3);
+	// 3 medições, mas duas idênticas → 2 distintas: vai para os 7 dias.
+	const alvo = [
+		{ id: 9, medido_em: "2026-11-16 07:00:00", peso: 80, impedancia: 540 },
+		{ id: 10, medido_em: "2026-11-16 07:10:00", peso: 80, impedancia: 540 },
+		{ id: 11, medido_em: "2026-11-16 07:20:00", peso: 80.3, impedancia: 506 },
+	];
+	const r = avaliarImpedancia(alvo, hist);
+	assert.deepEqual(r.suspeitas.map((x) => x.id), [9, 10]);
+	assert.equal(r.suspeitas[0].referencia, "mediana dos últimos 7 dias");
+	assert.equal(r.suspeitas[0].impedancia_referencia, 505);
+	assert.equal(r.suspeitas[0].diferenca_ohms, 35);
+	assert.equal(r.suspeitas[0].medicoes_na_referencia, 3);
 	// 535 fica a 30 Ω: não marca.
 	assert.equal(medicoesSuspeitas([{ medido_em: "2026-11-16 07:00:00", peso: 80, impedancia: 535 }], hist).length, 0);
-	// Sem nada nos 7 dias antes: não dá para avaliar.
-	assert.equal(medicoesSuspeitas([{ medido_em: "2026-11-30 07:00:00", peso: 80, impedancia: 900 }], hist).length, 0);
+});
+
+test("sem histórico: não marca e avisa histórico insuficiente", () => {
+	const r = avaliarImpedancia([
+		{ medido_em: "2026-11-30 07:00:00", peso: 80, impedancia: 900 },
+		{ medido_em: "2026-11-30 07:05:00", peso: 80.4, impedancia: 500 },
+	]);
+	assert.equal(r.suspeitas.length, 0);
+	assert.deepEqual(r.historico_insuficiente, ["2026-11-30 07:00:00", "2026-11-30 07:05:00"]);
 });
 
 test("impedância média sempre com 1 casa", () => {

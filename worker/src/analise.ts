@@ -449,54 +449,72 @@ export function mediana(vs: number[]): number | null {
 	return o.length % 2 ? o[m] : (o[m - 1] + o[m]) / 2;
 }
 
+export const MIN_MEDICOES_DIA = 3;
+export const MSG_HISTORICO_INSUFICIENTE = "histórico insuficiente";
+
+/** Peso + impedância: medições idênticas (a balança reenviando a mesma pesagem) contam uma vez só. */
+function chaveDistinta(m: Medicao) {
+	return `${m.peso}|${m.impedancia}`;
+}
+
 /**
- * Medições cuja impedância difere mais de 30 Ω da referência:
- *  - a mediana das impedâncias do MESMO dia (incluindo ela), quando o dia tem 2 ou mais medições;
- *  - se ela é a única do dia, a mediana das medições dos 7 dias anteriores.
- * Sem referência (única do dia e nada nos 7 dias antes), não é avaliada.
+ * Avalia a impedância de cada medição de `alvo`. Referência:
+ *  - mediana do MESMO dia, se o dia tem pelo menos 3 medições distintas (peso+impedância iguais contam uma vez);
+ *  - senão, mediana das medições distintas dos 7 dias anteriores;
+ *  - sem nenhuma nos 7 dias anteriores: não marca e devolve em `historico_insuficiente`.
+ * Suspeita = diferença maior que 30 Ω da referência.
  * `historico` deve trazer as medições desde 7 dias antes da primeira de `alvo` (pode incluir `alvo`).
- * Gordura, músculo e água de uma medição suspeita ficam duvidosos (pé molhado, meia, posição).
  */
-export function medicoesSuspeitas(alvo: Medicao[], historico: Medicao[] = alvo, limiar = LIMIAR_IMPEDANCIA_OHMS): Suspeita[] {
+export function avaliarImpedancia(alvo: Medicao[], historico: Medicao[] = alvo, limiar = LIMIAR_IMPEDANCIA_OHMS) {
 	const comImp = (l: Medicao[]) => l.filter((m) => typeof m.impedancia === "number" && m.impedancia! > 0);
 	const todas = new Map<string, Medicao>();
 	for (const m of comImp([...historico, ...alvo])) todas.set(m.medido_em, m);
-	const porDia = new Map<string, number[]>();
+	// Por dia: impedâncias das medições distintas.
+	const porDia = new Map<string, Map<string, number>>();
 	for (const m of todas.values()) {
 		const d = m.medido_em.slice(0, 10);
-		porDia.set(d, [...(porDia.get(d) ?? []), m.impedancia!]);
+		if (!porDia.has(d)) porDia.set(d, new Map());
+		porDia.get(d)!.set(chaveDistinta(m), m.impedancia!);
 	}
-	const r: Suspeita[] = [];
+	const doDia = (d: string) => [...(porDia.get(d)?.values() ?? [])];
+
+	const suspeitas: Suspeita[] = [];
+	const historico_insuficiente: string[] = [];
 	for (const m of comImp(alvo).sort((a, b) => (a.medido_em < b.medido_em ? -1 : 1))) {
 		const dia = m.medido_em.slice(0, 10);
-		const doDia = porDia.get(dia) ?? [];
-		let ref: number | null;
+		const noDia = doDia(dia);
+		let valores: number[];
 		let referencia: string;
-		let n: number;
-		if (doDia.length >= 2) {
-			ref = mediana(doDia);
+		if (noDia.length >= MIN_MEDICOES_DIA) {
+			valores = noDia;
 			referencia = "mediana do dia";
-			n = doDia.length;
 		} else {
-			const ant: number[] = [];
-			for (let k = 1; k <= 7; k++) ant.push(...(porDia.get(somarDias(dia, -k)) ?? []));
-			ref = mediana(ant);
+			valores = [];
+			for (let k = 1; k <= 7; k++) valores.push(...doDia(somarDias(dia, -k)));
 			referencia = "mediana dos últimos 7 dias";
-			n = ant.length;
 		}
-		if (ref === null) continue;
+		const ref = mediana(valores);
+		if (ref === null) {
+			historico_insuficiente.push(m.medido_em);
+			continue;
+		}
 		const dif = m.impedancia! - ref;
 		if (Math.abs(dif) > limiar) {
-			r.push({
+			suspeitas.push({
 				id: m.id,
 				medido_em: m.medido_em,
 				impedancia: m.impedancia!,
 				referencia,
-				medicoes_na_referencia: n,
+				medicoes_na_referencia: valores.length,
 				impedancia_referencia: arred(ref, 1)!,
 				diferenca_ohms: arred(dif, 1)!,
 			});
 		}
 	}
-	return r;
+	return { suspeitas, historico_insuficiente };
+}
+
+/** Só a lista de suspeitas (ver `avaliarImpedancia`). */
+export function medicoesSuspeitas(alvo: Medicao[], historico: Medicao[] = alvo, limiar = LIMIAR_IMPEDANCIA_OHMS): Suspeita[] {
+	return avaliarImpedancia(alvo, historico, limiar).suspeitas;
 }

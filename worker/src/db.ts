@@ -116,20 +116,59 @@ export function linhas<T = Record<string, unknown>>(rs: { rows: unknown[]; colum
 	});
 }
 
+/** Janela em que uma medição da balança com peso e impedância idênticos é tratada como repetida. */
+export const JANELA_DUPLICADA_MIN = 30;
+export const MSG_DUPLICADA = "duplicada, ignorada";
+
+/** "AAAA-MM-DD HH:MM:SS" − N minutos, no mesmo formato. */
+export function menosMinutos(medidoEm: string, minutos: number): string {
+	const t = Date.parse(`${medidoEm.replace(" ", "T")}Z`) - minutos * 60_000;
+	return new Date(t).toISOString().slice(0, 19).replace("T", " ");
+}
+
+/**
+ * Grava medições. Pula (sem erro):
+ *  - a que tem o mesmo medido_em de outra já gravada (`duplicadas`);
+ *  - a da balança com peso E impedância idênticos a outra dos 30 minutos anteriores (`ignoradas`, "duplicada, ignorada").
+ *    A balança às vezes reenvia a mesma pesagem com outro horário.
+ */
 export async function inserirMedicoes(db: Client, itens: Medicao[]) {
 	const cols = ["medido_em", ...COLUNAS_MEDICAO, "origem"];
-	const sql = `INSERT INTO medicoes (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})
+	const marcadores = cols.map(() => "?").join(", ");
+	const simples = `INSERT INTO medicoes (${cols.join(", ")}) VALUES (${marcadores})
 		ON CONFLICT(medido_em) DO NOTHING RETURNING id, medido_em`;
-	const stmts = itens.map((m) => ({
-		sql,
-		args: cols.map((c) => ((m as Record<string, unknown>)[c] ?? null) as InValue),
-	}));
+	const comJanela = `INSERT INTO medicoes (${cols.join(", ")}) SELECT ${marcadores}
+		WHERE NOT EXISTS (
+			SELECT 1 FROM medicoes WHERE peso = ? AND impedancia IS ? AND medido_em >= ? AND medido_em < ?
+		)
+		ON CONFLICT(medido_em) DO NOTHING RETURNING id, medido_em`;
+	// Em ordem de horário: dentro do mesmo envio, a primeira entra e as repetidas depois dela são barradas.
+	const ordem = [...itens].sort((x, y) => (x.medido_em < y.medido_em ? -1 : 1));
+	const stmts = ordem.map((m) => {
+		const valores = cols.map((c) => ((m as Record<string, unknown>)[c] ?? null) as InValue);
+		if (m.origem === "manual") return { sql: simples, args: valores };
+		return {
+			sql: comJanela,
+			args: [...valores, m.peso ?? null, m.impedancia ?? null, menosMinutos(m.medido_em, JANELA_DUPLICADA_MIN), m.medido_em],
+		};
+	});
 	const res = await db.batch(stmts, "write");
 	const inseridas = res.flatMap((r) => linhas<{ id: number; medido_em: string }>(r));
 	const novas = new Set(inseridas.map((r) => r.medido_em));
+	const fora = ordem.filter((m) => !novas.has(m.medido_em)).map((m) => m.medido_em);
+	// Das que não entraram: se o horário existe no banco, já estava gravada; se não, foi barrada pela janela de 30 min.
+	let existentes = new Set<string>();
+	if (fora.length) {
+		const rs = await db.execute({
+			sql: `SELECT medido_em FROM medicoes WHERE medido_em IN (${fora.map(() => "?").join(", ")})`,
+			args: fora,
+		});
+		existentes = new Set(linhas<{ medido_em: string }>(rs).map((r) => r.medido_em));
+	}
 	return {
 		inseridas,
-		duplicadas: itens.filter((m) => !novas.has(m.medido_em)).map((m) => m.medido_em),
+		duplicadas: fora.filter((k) => existentes.has(k)),
+		ignoradas: fora.filter((k) => !existentes.has(k)).map((medido_em) => ({ medido_em, resultado: MSG_DUPLICADA })),
 	};
 }
 

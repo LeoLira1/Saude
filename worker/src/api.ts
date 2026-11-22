@@ -36,7 +36,14 @@ api.post("/medicao", chaveApp, async (c) => {
 	const medicoes = itens.map((m) => validarMedicao(m));
 	const db = await abrir(c.env);
 	const r = await inserirMedicoes(db, medicoes);
-	return c.json({ ok: true, inseridas: r.inseridas.length, duplicadas: r.duplicadas.length, ids: r.inseridas });
+	return c.json({
+		ok: true,
+		inseridas: r.inseridas.length,
+		duplicadas: r.duplicadas.length,
+		ignoradas: r.ignoradas.length,
+		ids: r.inseridas,
+		detalhes_ignoradas: r.ignoradas,
+	});
 });
 
 api.post("/atividade", chaveApp, async (c) => {

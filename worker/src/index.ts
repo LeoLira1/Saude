@@ -13,7 +13,8 @@ import {
 	lerMetrica,
 	lerPeriodo,
 	medicaoDoDia,
-	medicoesSuspeitas,
+	avaliarImpedancia,
+	MSG_HISTORICO_INSUFICIENTE,
 	casasDe,
 	METRICAS_DE_IMPEDANCIA,
 	LIMIAR_IMPEDANCIA_OHMS,
@@ -59,15 +60,21 @@ function enxuta(m: Record<string, unknown>) {
 /** Bônus: marca medições com impedância > 30 Ω diferente da anterior do mesmo dia (só nas métricas de bioimpedância). */
 function comSuspeitas<T extends object>(chave: string, resumo: T, ms: Medicao[], hist: Medicao[]) {
 	if (!METRICAS_DE_IMPEDANCIA.has(chave)) return resumo;
-	const sus = medicoesSuspeitas(ms, hist);
-	if (!sus.length) return resumo;
-	return {
-		...resumo,
-		medicoes_suspeitas: sus,
-		aviso_suspeitas:
-			`${sus.length} medição(ões) com impedância a mais de ${LIMIAR_IMPEDANCIA_OHMS} Ω da referência (mediana do dia, ou dos 7 dias anteriores se foi a única do dia): ` +
-			"gordura, músculo e água delas podem estar errados (pé molhado, meia, posição). Os valores acima ainda as incluem.",
-	};
+	const { suspeitas: sus, historico_insuficiente: semRef } = avaliarImpedancia(ms, hist);
+	let r: Record<string, unknown> = { ...(resumo as Record<string, unknown>) };
+	if (sus.length) {
+		r = {
+			...r,
+			medicoes_suspeitas: sus,
+			aviso_suspeitas:
+				`${sus.length} medição(ões) com impedância a mais de ${LIMIAR_IMPEDANCIA_OHMS} Ω da referência (mediana do dia com 3+ medições distintas, ` +
+				"ou dos 7 dias anteriores): gordura, músculo e água delas podem estar errados (pé molhado, meia, posição). Os valores acima ainda as incluem.",
+		};
+	}
+	if (semRef.length) {
+		r = { ...r, aviso_impedancia: `${MSG_HISTORICO_INSUFICIENTE}: ${semRef.length} medição(ões) sem referência para avaliar a impedância`, sem_referencia: semRef };
+	}
+	return r;
 }
 
 /** Medições do período + as dos 7 dias antes (referência da impedância suspeita). */
@@ -101,7 +108,9 @@ function createServer() {
 				const db = await abrir(env);
 				const { ms: lidas, hist } = await lerComHistorico(db, p.inicio, p.fim);
 				const ms = [...lidas].reverse();
-				const sus = new Map(medicoesSuspeitas(ms, hist).map((x) => [x.medido_em, x]));
+				const av = avaliarImpedancia(ms, hist);
+				const sus = new Map(av.suspeitas.map((x) => [x.medido_em, x]));
+				const semRef = new Set(av.historico_insuficiente);
 				return json({
 					periodo: p,
 					total: ms.length,
@@ -109,7 +118,9 @@ function createServer() {
 						const x = sus.get(m.medido_em);
 						return x
 							? { ...enxuta(m), suspeita: true, motivo_suspeita: motivoSuspeita(x) }
-							: enxuta(m);
+							: semRef.has(m.medido_em)
+								? { ...enxuta(m), aviso_impedancia: MSG_HISTORICO_INSUFICIENTE }
+								: enxuta(m);
 					}),
 				});
 			} catch (e) {
@@ -205,13 +216,13 @@ function createServer() {
 						lerAtividade(db, d, d),
 					]);
 					const dia = medicaoDoDia(ms, d);
-					const sus = dia
-						? medicoesSuspeitas(
+					const av = dia
+						? avaliarImpedancia(
 								ms.filter((m) => m.medido_em.startsWith(dia.data_real_medicao)),
 								hist,
 							)
-						: [];
-					return { dia, atividade: at[0] ?? null, suspeitas: sus };
+						: { suspeitas: [], historico_insuficiente: [] };
+					return { dia, atividade: at[0] ?? null, suspeitas: av.suspeitas, semRef: av.historico_insuficiente };
 				};
 				const [a, b] = await Promise.all([pega(data1), pega(data2)]);
 				const avisos: string[] = [];
@@ -246,6 +257,9 @@ function createServer() {
 				for (const [rot, lado] of [["data1", a], ["data2", b]] as const) {
 					if (lado.dia && !lado.dia.mesmo_dia) {
 						avisos.push(`${rot}: sem medição no dia; usada a de ${lado.dia.data_real_medicao}.`);
+					}
+					if (lado.semRef.length) {
+						avisos.push(`${rot}: ${MSG_HISTORICO_INSUFICIENTE} para avaliar a impedância (${lado.semRef.length} medição(ões)).`);
 					}
 					if (lado.suspeitas.length) {
 						avisos.push(
