@@ -86,7 +86,10 @@ export function lerPeriodo(texto: string | undefined, agora: Date = new Date()):
 
 // ── Métricas ────────────────────────────────────────────────────────────────
 
-export type Fonte = "medicoes" | "atividade";
+export type Fonte = "medicoes" | "atividade" | "nutricao";
+
+/** Um dia de refeições registradas (soma dos itens). */
+export type NutricaoDia = { data: string; kcal_consumidas: number; proteina_g: number; carbo_g: number; gordura_g: number; fibra_g: number };
 export type InfoMetrica = { coluna: string; fonte: Fonte; nome: string; unidade: string };
 
 export const METRICAS: Record<string, InfoMetrica> = {
@@ -110,6 +113,11 @@ export const METRICAS: Record<string, InfoMetrica> = {
 	sono_rem_min: { coluna: "sono_rem_min", fonte: "atividade", nome: "Sono REM", unidade: "min" },
 	acordado_min: { coluna: "acordado_min", fonte: "atividade", nome: "Acordado na noite", unidade: "min" },
 	spo2_medio: { coluna: "spo2_medio", fonte: "atividade", nome: "SpO2 média", unidade: "%" },
+	kcal_consumidas: { coluna: "kcal_consumidas", fonte: "nutricao", nome: "Calorias consumidas", unidade: "kcal" },
+	proteina_g: { coluna: "proteina_g", fonte: "nutricao", nome: "Proteína consumida", unidade: "g" },
+	carbo_g: { coluna: "carbo_g", fonte: "nutricao", nome: "Carboidrato consumido", unidade: "g" },
+	gordura_g: { coluna: "gordura_g", fonte: "nutricao", nome: "Gordura consumida", unidade: "g" },
+	fibra_g: { coluna: "fibra_g", fonte: "nutricao", nome: "Fibra consumida", unidade: "g" },
 };
 
 const APELIDOS: Record<string, string> = {
@@ -141,6 +149,18 @@ const APELIDOS: Record<string, string> = {
 	steps: "passos",
 	kcal: "calorias",
 	weight: "peso",
+	kcal_consumida: "kcal_consumidas",
+	calorias_consumidas: "kcal_consumidas",
+	consumo: "kcal_consumidas",
+	ingestao: "kcal_consumidas",
+	proteina_consumida: "proteina_g",
+	carbo: "carbo_g",
+	carboidrato: "carbo_g",
+	carboidratos: "carbo_g",
+	carbo_consumido: "carbo_g",
+	gordura_consumida: "gordura_g",
+	fibra: "fibra_g",
+	fibras: "fibra_g",
 };
 
 export function lerMetrica(texto: string): InfoMetrica & { chave: string } {
@@ -167,6 +187,7 @@ export function casasDe(chave: string): number {
 	if (chave === "passos") return 0;
 	const u = METRICAS[chave]?.unidade;
 	if (u === "min" || u === "kcal") return 0;
+	if (u === "g") return 1;
 	return 2;
 }
 
@@ -177,9 +198,9 @@ export function arred(v: number | null | undefined, casas = 2): number | null {
 }
 
 /** Série diária de uma métrica: medições do mesmo dia viram a média do dia. */
-export function serieDiaria(info: InfoMetrica, medicoes: Medicao[], atividade: Atividade[]): Ponto[] {
+export function serieDiaria(info: InfoMetrica, medicoes: Medicao[], atividade: Atividade[], nutricao: NutricaoDia[] = []): Ponto[] {
 	const porDia = new Map<string, number[]>();
-	const fonte = info.fonte === "medicoes" ? medicoes : atividade;
+	const fonte = info.fonte === "medicoes" ? medicoes : info.fonte === "nutricao" ? nutricao : atividade;
 	for (const r of fonte as Record<string, unknown>[]) {
 		const v = r[info.coluna];
 		if (typeof v !== "number" || !Number.isFinite(v)) continue;
@@ -259,7 +280,7 @@ export function resumoSerie(info: InfoMetrica & { chave: string }, pontos: Ponto
 function textoTendencia(porSemana: number | null, info: InfoMetrica): string {
 	if (porSemana === null) return "dados insuficientes";
 	const escala = Math.abs(porSemana);
-	const limiar: Record<string, number> = { kg: 0.05, "%": 0.05, min: 3, kcal: 10, bpm: 0.3, "": 0.05 };
+	const limiar: Record<string, number> = { kg: 0.05, "%": 0.05, min: 3, kcal: 10, bpm: 0.3, g: 2, "": 0.05 };
 	const lim = info.coluna === "passos" ? 150 : (limiar[info.unidade] ?? 0.05);
 	if (escala < lim) return "estável";
 	return porSemana > 0 ? "subindo" : "caindo";

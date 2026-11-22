@@ -27,6 +27,18 @@ import {
 } from "./analise.ts";
 import { abrir, COLUNAS_ATIVIDADE, COLUNAS_MEDICAO, inserirMedicoes, lerAtividade, lerMedicoes, linhas, type Medicao } from "./db.ts";
 import { GitHubHandler } from "./github-handler.ts";
+import { buscar, somar, TIPOS_REFEICAO, NUTRIENTES } from "./nutricao.ts";
+import {
+	apagarRefeicao,
+	cadastrarAlimento,
+	calcularItens,
+	garantirTaco,
+	gravarRefeicao,
+	lerItens,
+	nutricaoPorDia,
+	todosAlimentos,
+	totalDoDia,
+} from "./refeicoes.ts";
 import type { Props } from "./utils.ts";
 import { ErroValidacao, normalizarDataHora, validarMedicao } from "./validar.ts";
 
@@ -49,7 +61,7 @@ const PERIODO = z
 	);
 
 const NOMES_METRICAS = Object.keys(METRICAS).join(", ");
-const METRICAS_RESUMO = ["peso", "gordura_pct", "musculo_kg", "visceral", "agua_pct", "passos", "calorias", "sono_min", "fc_repouso"];
+const METRICAS_RESUMO = ["peso", "gordura_pct", "musculo_kg", "visceral", "agua_pct", "passos", "calorias", "sono_min", "fc_repouso", "kcal_consumidas", "proteina_g"];
 
 function enxuta(m: Record<string, unknown>) {
 	const o: Record<string, unknown> = {};
@@ -146,11 +158,12 @@ function createServer() {
 				const info = lerMetrica(metrica);
 				const p = lerPeriodo(periodo);
 				const db = await abrir(env);
-				const [{ ms, hist }, at] = await Promise.all([
+				const [{ ms, hist }, at, nut] = await Promise.all([
 					info.fonte === "medicoes" ? lerComHistorico(db, p.inicio, p.fim) : { ms: [], hist: [] },
 					info.fonte === "atividade" ? lerAtividade(db, p.inicio, p.fim) : [],
+					info.fonte === "nutricao" ? nutricaoPorDia(db, p.inicio, p.fim) : [],
 				]);
-				const serie = serieDiaria(info, ms, at);
+				const serie = serieDiaria(info, ms, at, nut);
 				const casas = casasDe(info.chave);
 				return json({
 					periodo: p,
@@ -181,12 +194,17 @@ function createServer() {
 				const p = lerPeriodo(periodo);
 				const infos = (metricas?.length ? metricas : METRICAS_RESUMO).map(lerMetrica);
 				const db = await abrir(env);
-				const [{ ms, hist }, at] = await Promise.all([lerComHistorico(db, p.inicio, p.fim), lerAtividade(db, p.inicio, p.fim)]);
+				const [{ ms, hist }, at, nut] = await Promise.all([
+					lerComHistorico(db, p.inicio, p.fim),
+					lerAtividade(db, p.inicio, p.fim),
+					nutricaoPorDia(db, p.inicio, p.fim),
+				]);
 				return json({
 					periodo: p,
 					medicoes_no_periodo: ms.length,
 					dias_de_atividade: at.length,
-					metricas: infos.map((i) => comSuspeitas(i.chave, resumoSerie(i, serieDiaria(i, ms, at)), ms, hist)),
+					dias_com_refeicoes: nut.length,
+					metricas: infos.map((i) => comSuspeitas(i.chave, resumoSerie(i, serieDiaria(i, ms, at, nut)), ms, hist)),
 				});
 			} catch (e) {
 				return falha(e);
@@ -354,7 +372,8 @@ function createServer() {
 		"correlacionar",
 		{
 			description:
-				"Correlação (Pearson) entre duas métricas, dia a dia, no período. Ex.: sono x peso, passos x gordura, fc_repouso x sono. " +
+				"Correlação (Pearson) entre duas métricas, dia a dia, no período. Ex.: sono x peso, passos x gordura, fc_repouso x sono, " +
+				"kcal_consumidas x peso do dia seguinte (defasagem_dias = 1). Métricas de refeição só contam dias com refeição registrada. " +
 				"Devolve r (−1 a 1), força em português, quantos dias entraram, a inclinação (quanto metrica2 muda por +1 de metrica1) e os pares. " +
 				"defasagem_dias = N compara metrica1 do dia D com metrica2 do dia D+N (ex.: passos de hoje x peso de amanhã = 1). " +
 				"Correlação não prova causa; com menos de ~10 dias o resultado é frágil. Só leitura.",
@@ -375,9 +394,9 @@ function createServer() {
 				const db = await abrir(env);
 				const fim2 = lag > 0 ? somarDias(p.fim, lag) : p.fim;
 				const ini2 = lag < 0 ? somarDias(p.inicio, lag) : p.inicio;
-				const [ms, at] = await Promise.all([lerMedicoes(db, ini2, fim2), lerAtividade(db, ini2, fim2)]);
-				const s1 = serieDiaria(i1, ms, at).filter((x) => x.data >= p.inicio && x.data <= p.fim);
-				const s2 = serieDiaria(i2, ms, at);
+				const [ms, at, nut] = await Promise.all([lerMedicoes(db, ini2, fim2), lerAtividade(db, ini2, fim2), nutricaoPorDia(db, ini2, fim2)]);
+				const s1 = serieDiaria(i1, ms, at, nut).filter((x) => x.data >= p.inicio && x.data <= p.fim);
+				const s2 = serieDiaria(i2, ms, at, nut);
 				const { pares, r, inclinacao } = correlacionarSeries(s1, s2, lag);
 				return json({
 					periodo: p,
@@ -474,6 +493,233 @@ function createServer() {
 				}
 				await db.execute({ sql: "DELETE FROM medicoes WHERE id = ?", args: [id] });
 				return json({ apagado: true, medicao_apagada: enxuta(atual) });
+			} catch (e) {
+				return falha(e);
+			}
+		},
+	);
+
+	// ── Refeições ──────────────────────────────────────────────────────────
+
+	const POR_100G = {
+		kcal: z.number().min(0).max(900).optional().describe("kcal por 100 g."),
+		proteina_g: z.number().min(0).max(100).optional().describe("Proteína (g) por 100 g."),
+		carbo_g: z.number().min(0).max(100).optional().describe("Carboidrato (g) por 100 g."),
+		gordura_g: z.number().min(0).max(100).optional().describe("Gordura/lipídeos (g) por 100 g."),
+		fibra_g: z.number().min(0).max(100).optional().describe("Fibra alimentar (g) por 100 g."),
+	};
+
+	const porCem = (a: Record<string, unknown>) => Object.fromEntries(NUTRIENTES.map((k) => [k, a[k] ?? null]));
+
+	server.registerTool(
+		"buscar_alimento",
+		{
+			description:
+				"Procura alimentos pelo nome na tabela de alimentos (TACO/Unicamp 4ª edição, 597 itens, mais os cadastrados à mão). " +
+				"Tolera erro de digitação, falta de acento e plural. Devolve id, nome exato, categoria, fonte e valores POR 100 g " +
+				"(kcal, proteína, carboidrato, gordura, fibra; null = não analisado na TACO). " +
+				"A TACO separa cru e cozido: escolha a forma em que o alimento foi pesado. Se houver mais de um candidato plausível, " +
+				"pergunte ao usuário antes de registrar. Só leitura.",
+			inputSchema: z.object({
+				texto: z.string().min(1).max(120).describe('Ex.: "arroz cozido", "frango peito grelhado", "banana prata".'),
+				limite: z.number().int().min(1).max(40).optional().describe("Máximo de candidatos (padrão 15)."),
+			}),
+			annotations: { readOnlyHint: true, openWorldHint: false },
+		},
+		async ({ texto, limite }) => {
+			try {
+				const db = await abrir(env);
+				await garantirTaco(db);
+				const achados = buscar(texto, await todosAlimentos(db), limite ?? 15);
+				if (!achados.length) {
+					return json({ encontrados: 0, mensagem: `Nada parecido com "${texto}". Tente outra palavra ou use cadastrar_alimento.` });
+				}
+				return json({
+					encontrados: achados.length,
+					alimentos: achados.map((a) => ({
+						id: a.id,
+						nome: a.nome,
+						categoria: a.categoria,
+						fonte: a.fonte,
+						por_100g: porCem(a),
+						semelhanca: a.nota,
+					})),
+				});
+			} catch (e) {
+				return falha(e);
+			}
+		},
+	);
+
+	server.registerTool(
+		"cadastrar_alimento",
+		{
+			description:
+				"Cadastra um alimento que não está na TACO (fonte = manual), com valores POR 100 g (ex.: rótulo do produto convertido para 100 g). " +
+				"kcal é obrigatório. Se já existir alimento com o mesmo nome, não duplica e devolve o existente. Confirme os valores com o usuário antes.",
+			inputSchema: z.object({
+				nome: z.string().min(2).max(120),
+				categoria: z.string().max(60).optional(),
+				...POR_100G,
+				kcal: z.number().min(0).max(900).describe("kcal por 100 g."),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+		},
+		async (a) => {
+			try {
+				const soma = (a.proteina_g ?? 0) + (a.carbo_g ?? 0) + (a.gordura_g ?? 0) + (a.fibra_g ?? 0);
+				if (soma > 101) throw new ErroValidacao(`Proteína + carboidrato + gordura + fibra = ${soma} g em 100 g: confira os valores.`);
+				const db = await abrir(env);
+				await garantirTaco(db);
+				const r = await cadastrarAlimento(db, a);
+				return json({
+					criado: r.criado,
+					mensagem: r.criado ? "Alimento cadastrado." : "Já existia um alimento com esse nome; nada foi criado.",
+					alimento: { id: r.alimento.id, nome: r.alimento.nome, fonte: r.alimento.fonte, por_100g: porCem(r.alimento) },
+				});
+			} catch (e) {
+				return falha(e);
+			}
+		},
+	);
+
+	server.registerTool(
+		"registrar_refeicao",
+		{
+			description:
+				"Registra uma refeição. Cada item: alimento_id (de buscar_alimento) OU nome + valores por 100 g (pelo menos kcal), e os gramas. " +
+				"Calcula cada item pelos gramas (valor por 100 g × gramas ÷ 100) e grava os valores calculados (não mudam se a tabela for editada depois). " +
+				"data_hora padrão = agora (Brasília). Devolve os itens, o total da refeição e o total do dia. " +
+				"Confirme alimentos e gramas com o usuário antes de gravar.",
+			inputSchema: z.object({
+				tipo: z.enum(TIPOS_REFEICAO).describe("cafe, almoco, lanche, jantar ou outro."),
+				data_hora: z.string().max(19).optional().describe('"AAAA-MM-DD HH:MM" no horário de Brasília. Padrão: agora.'),
+				observacao: z.string().max(300).optional(),
+				itens: z
+					.array(
+						z.object({
+							alimento_id: z.number().int().positive().optional(),
+							nome: z.string().min(1).max(120).optional().describe("Nome livre, quando não há alimento_id."),
+							...POR_100G,
+							gramas: z.number().gt(0).max(5000).describe("Quantidade consumida em gramas."),
+						}),
+					)
+					.min(1)
+					.max(40),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+		},
+		async ({ tipo, data_hora, observacao, itens }) => {
+			try {
+				const agora = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 19).replace("T", " ");
+				const quando = data_hora ? normalizarDataHora(data_hora) : agora;
+				const db = await abrir(env);
+				await garantirTaco(db);
+				const calculados = await calcularItens(db, itens);
+				const id = await gravarRefeicao(db, { data_hora: quando, tipo, observacao }, calculados);
+				const { faltando, ...total } = somar(calculados);
+				return json({
+					gravado: true,
+					refeicao: { id, data_hora: quando, tipo, observacao: observacao ?? null },
+					itens: calculados.map((it) => ({
+						alimento_id: it.alimento_id,
+						nome: it.nome,
+						fonte: it.fonte,
+						gramas: it.gramas,
+						...Object.fromEntries(NUTRIENTES.map((k) => [k, it[k]])),
+					})),
+					total_refeicao: total,
+					total_dia: await totalDoDia(db, quando.slice(0, 10)),
+					aviso: Object.keys(faltando).length
+						? `Alguns itens não têm valor na TACO para: ${Object.keys(faltando).join(", ")} (contados como 0 nos totais).`
+						: undefined,
+				});
+			} catch (e) {
+				return falha(e);
+			}
+		},
+	);
+
+	server.registerTool(
+		"ver_refeicoes",
+		{
+			description:
+				"Lista as refeições do período (mais recentes primeiro) com itens, gramas e valores, o total de cada refeição, " +
+				"o total de cada dia e a média por dia (só dias com refeição registrada). Só leitura.",
+			inputSchema: z.object({ periodo: PERIODO }),
+			annotations: { readOnlyHint: true, openWorldHint: false },
+		},
+		async ({ periodo }) => {
+			try {
+				const p = lerPeriodo(periodo ?? "7d");
+				const db = await abrir(env);
+				const linhasItens = await lerItens(db, p.inicio, p.fim);
+				const porRef = new Map<number, typeof linhasItens>();
+				for (const l of linhasItens) porRef.set(l.refeicao_id, [...(porRef.get(l.refeicao_id) ?? []), l]);
+				const refeicoes = [...porRef.entries()]
+					.map(([id, l]) => {
+						const itens = l.filter((x) => x.nome);
+						const { faltando: _f, ...total } = somar(itens);
+						return {
+							id,
+							data_hora: l[0].data_hora,
+							tipo: l[0].tipo,
+							observacao: l[0].observacao ?? undefined,
+							itens: itens.map((x) => ({
+								nome: x.nome,
+								alimento_id: x.alimento_id,
+								gramas: x.gramas,
+								...Object.fromEntries(NUTRIENTES.map((k) => [k, x[k]])),
+							})),
+							total,
+						};
+					})
+					.sort((a, b) => (a.data_hora < b.data_hora ? 1 : -1));
+				const dias = await nutricaoPorDia(db, p.inicio, p.fim);
+				const med = (k: keyof (typeof dias)[number]) => arred(media(dias.map((d) => d[k] as number)), k === "kcal_consumidas" ? 0 : 1);
+				return json({
+					periodo: p,
+					refeicoes_no_periodo: refeicoes.length,
+					dias_com_refeicoes: dias.length,
+					media_por_dia: dias.length
+						? { kcal: med("kcal_consumidas"), proteina_g: med("proteina_g"), carbo_g: med("carbo_g"), gordura_g: med("gordura_g"), fibra_g: med("fibra_g") }
+						: null,
+					totais_por_dia: [...dias].reverse(),
+					refeicoes,
+				});
+			} catch (e) {
+				return falha(e);
+			}
+		},
+	);
+
+	server.registerTool(
+		"apagar_refeicao",
+		{
+			description:
+				"Apaga UMA refeição (e os itens dela) pelo id. Sem confirmar = true só mostra o que seria apagado. " +
+				"Mostre a refeição ao usuário e peça confirmação antes de chamar com confirmar = true.",
+			inputSchema: z.object({
+				id: z.number().int().positive(),
+				confirmar: z.boolean().optional().describe("true para apagar de verdade."),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+		},
+		async ({ id, confirmar }) => {
+			try {
+				const db = await abrir(env);
+				const ref = linhas<{ id: number; data_hora: string; tipo: string; observacao: string | null }>(
+					await db.execute({ sql: "SELECT * FROM refeicoes WHERE id = ?", args: [id] }),
+				)[0];
+				if (!ref) return json({ apagado: false, motivo: `Refeição ${id} não existe.` });
+				const itens = linhas<Record<string, number | string | null>>(
+					await db.execute({ sql: "SELECT nome, gramas, kcal, proteina_g, carbo_g, gordura_g, fibra_g FROM refeicao_itens WHERE refeicao_id = ?", args: [id] }),
+				);
+				const { faltando: _f, ...total } = somar(itens as never);
+				const descricao = { ...ref, itens, total };
+				if (!confirmar) return json({ apagado: false, seria_apagada: descricao, aviso: "Chame de novo com confirmar = true para apagar." });
+				await apagarRefeicao(db, id);
+				return json({ apagado: true, refeicao_apagada: descricao, total_dia: await totalDoDia(db, ref.data_hora.slice(0, 10)) });
 			} catch (e) {
 				return falha(e);
 			}

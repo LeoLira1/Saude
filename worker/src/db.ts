@@ -33,6 +33,40 @@ export const DDL = [
 		spo2_medio REAL,
 		atualizado_em TEXT NOT NULL DEFAULT (datetime('now', '-3 hours'))
 	)`,
+	`CREATE TABLE IF NOT EXISTS alimentos (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		nome TEXT NOT NULL,
+		categoria TEXT,
+		kcal REAL,
+		proteina_g REAL,
+		carbo_g REAL,
+		gordura_g REAL,
+		fibra_g REAL,
+		fonte TEXT NOT NULL CHECK (fonte IN ('TACO', 'manual')),
+		taco_id INTEGER UNIQUE,
+		criado_em TEXT NOT NULL DEFAULT (datetime('now', '-3 hours'))
+	)`,
+	`CREATE TABLE IF NOT EXISTS refeicoes (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		data_hora TEXT NOT NULL,
+		tipo TEXT NOT NULL CHECK (tipo IN ('cafe', 'almoco', 'lanche', 'jantar', 'outro')),
+		observacao TEXT,
+		criado_em TEXT NOT NULL DEFAULT (datetime('now', '-3 hours'))
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_refeicoes_data_hora ON refeicoes(data_hora)`,
+	`CREATE TABLE IF NOT EXISTS refeicao_itens (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		refeicao_id INTEGER NOT NULL REFERENCES refeicoes(id) ON DELETE CASCADE,
+		alimento_id INTEGER REFERENCES alimentos(id),
+		nome TEXT NOT NULL,
+		gramas REAL NOT NULL,
+		kcal REAL,
+		proteina_g REAL,
+		carbo_g REAL,
+		gordura_g REAL,
+		fibra_g REAL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_refeicao_itens_refeicao ON refeicao_itens(refeicao_id)`,
 ];
 
 export const COLUNAS_MEDICAO = [

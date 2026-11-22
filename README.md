@@ -52,7 +52,14 @@ O token do Turso fica só no Worker; o app nunca o vê.
 ## Ferramentas MCP
 
 `ver_medicoes`, `ver_evolucao`, `resumo_periodo`, `comparar_datas`, `ver_atividade`, `ver_sono`,
-`correlacionar`, `registrar_medicao_manual`, `apagar_medicao` e `resumo_hoje`. Períodos aceitos: `7d`,
+`correlacionar`, `registrar_medicao_manual`, `apagar_medicao` e `resumo_hoje`.
+
+Refeições: `buscar_alimento`, `cadastrar_alimento`, `registrar_refeicao`, `ver_refeicoes` e `apagar_refeicao`.
+A tabela `alimentos` vem com a **TACO 4ª edição** (NEPA/Unicamp, 597 alimentos, valores por 100 g, nomes como na
+tabela; extraída da planilha oficial para `worker/src/taco.json` e carregada no Turso na primeira chamada).
+Os itens de cada refeição guardam os valores já calculados pelos gramas. As métricas `kcal_consumidas`,
+`proteina_g`, `carbo_g`, `gordura_g` e `fibra_g` (soma do dia) entram em `ver_evolucao`, `resumo_periodo` e
+`correlacionar` (ex.: `kcal_consumidas` x `peso` com `defasagem_dias = 1`). Períodos aceitos: `7d`,
 `30d`, `3 meses`, `1 ano`, `tudo`, `2026-05`, `2026-01-01..2026-03-31`.
 
 ## Desenvolvimento
