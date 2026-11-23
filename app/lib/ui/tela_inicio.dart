@@ -63,7 +63,7 @@ class _TelaInicioState extends State<TelaInicio> {
         final ult = app.ultima;
         return RefreshIndicator(
           color: Cores.ciano,
-          onRefresh: () => app.sincronizar(origem: 'manual'),
+          onRefresh: () => Future.wait([app.sincronizar(origem: 'manual'), app.atualizarPrato()]),
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             children: [
@@ -93,6 +93,8 @@ class _TelaInicioState extends State<TelaInicio> {
               ],
               const SizedBox(height: 14),
               _CartaoPulseira(app: app, irParaAjustes: widget.irParaAjustes),
+              const SizedBox(height: 14),
+              _CartaoPrato(app: app),
               if (app.avisoSinc != null || app.pendentes > 0) ...[
                 const SizedBox(height: 12),
                 Text(
@@ -481,6 +483,110 @@ class _CartaoPulseira extends StatelessWidget {
   String _quando(DateTime? d) {
     if (d == null) return 'sem sincronizar';
     return 'atualizado ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+  }
+}
+
+const _semRefeicao = 'Nenhuma refeição registrada';
+
+class _CartaoPrato extends StatelessWidget {
+  const _CartaoPrato({required this.app});
+  final EstadoApp app;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = app.pratoDeHoje;
+    final comeu = p != null && p.temRefeicao;
+    final ativas = app.atividadeDe(DateTime.now())?.calorias;
+    final gasto = gastoEstimado(basal: app.ultima?.metabolismoKcal, ativas: ativas);
+    final saldo = comeu && gasto != null ? p.kcal - gasto : null;
+    final corSaldo = saldo == null ? Cores.suave : (saldo <= 0 ? Cores.verde : Cores.ambar);
+
+    final ingeridoTxt = comeu ? '${milhar(p.kcal)} kcal' : '—';
+    final gastoTxt = gasto == null ? '—' : '${milhar(gasto)} kcal${ativas == null ? ' (só basal)' : ''}';
+    final saldoTxt = saldo == null ? '—' : '${saldo.round() == 0 ? '0' : '${saldo > 0 ? '+' : '−'}${milhar(saldo.abs())}'} kcal';
+    final aguaTxt = p == null
+        ? '—'
+        : p.metaAguaMl == null
+            ? '${milhar(p.aguaMl)} ml'
+            : '${milhar(p.aguaMl)} / ${milhar(p.metaAguaMl)} ml';
+
+    final itens = [
+      (Icons.restaurant_outlined, p != null && !comeu ? _semRefeicao : 'Calorias ingeridas', ingeridoTxt, Cores.ciano, null as Color?),
+      (Icons.local_fire_department_outlined, 'Gasto estimado', gastoTxt, Cores.ambar, null),
+      (Icons.balance_outlined, 'Saldo', saldoTxt, corSaldo, saldo == null ? null : corSaldo),
+      (Icons.water_drop_outlined, 'Água', aguaTxt, Cores.violeta, null),
+    ];
+    final ult = p?.ultimaRefeicao;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Text('Hoje no prato', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+            const Spacer(),
+            if (app.carregandoPrato)
+              const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+            else if (ult != null && ult.length >= 16)
+              Text('atualizado ${ult.substring(11, 16)}', style: const TextStyle(color: Cores.suave, fontSize: 12)),
+          ]),
+          const SizedBox(height: 12),
+          for (final (ic, rot, val, cor, corValor) in itens)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(children: [
+                Icon(ic, color: cor, size: 22),
+                const SizedBox(width: 12),
+                // Sem refeição hoje: a mensagem ocupa a linha toda no lugar de "Calorias ingeridas … 0".
+                if (rot == _semRefeicao)
+                  const Expanded(child: Text(_semRefeicao, style: TextStyle(color: Cores.suave)))
+                else ...[
+                  Text(rot, style: const TextStyle(color: Cores.suave)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      val,
+                      textAlign: TextAlign.right,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16, color: corValor),
+                    ),
+                  ),
+                ],
+              ]),
+            ),
+          if (comeu && gasto != null && gasto > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: _BarraPrato(ingerido: p.kcal, gasto: gasto),
+            ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Ingerido vs. gasto: a barra enche até o gasto; passou dele, fica laranja.
+class _BarraPrato extends StatelessWidget {
+  const _BarraPrato({required this.ingerido, required this.gasto});
+  final double ingerido;
+  final double gasto;
+
+  @override
+  Widget build(BuildContext context) {
+    final frac = ingerido / gasto;
+    final cor = frac <= 1 ? Cores.verde : Cores.ambar;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: LinearProgressIndicator(
+          value: frac.clamp(0, 1).toDouble(),
+          minHeight: 10,
+          color: cor,
+          backgroundColor: Cores.cartao2,
+        ),
+      ),
+      const SizedBox(height: 6),
+      Text('${(frac * 100).round()}% do gasto estimado', style: TextStyle(color: cor, fontSize: 11)),
+    ]);
   }
 }
 

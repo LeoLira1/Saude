@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createClient } from "@libsql/client";
 import { buscar, calcularItem, notaBusca, somar, somarPorDia } from "../src/nutricao.ts";
 import { DDL } from "../src/db.ts";
-import { calcularItens, cadastrarAlimento, garantirTaco, gravarRefeicao, nutricaoPorDia, TACO, todosAlimentos, totalDoDia } from "../src/refeicoes.ts";
+import { calcularItens, cadastrarAlimento, garantirTaco, gravarRefeicao, nutricaoPorDia, pratoDoDia, TACO, todosAlimentos, totalDoDia } from "../src/refeicoes.ts";
 import { lerMetrica, serieDiaria, correlacionarSeries } from "../src/analise.ts";
 
 // Arroz, tipo 1, cozido (TACO 3): 128,26 kcal; 2,52 g prot; 28,06 g carbo; 0,23 g gord; 1,56 g fibra por 100 g
@@ -104,6 +104,15 @@ test("fluxo no banco: TACO, cadastrar, refeição com valores gravados e total d
 	const dia = await totalDoDia(db, "2026-11-22");
 	assert.equal(dia.refeicoes, 2);
 	assert.equal(dia.kcal, Math.round((kcalArroz150 + 120 + 10 + kcalArroz100) * 100) / 100);
+
+	// Card "Hoje no prato" do app: kcal do dia e horário da última refeição.
+	assert.deepEqual(await pratoDoDia(db, "2026-11-22"), {
+		data: "2026-11-22",
+		refeicoes: 2,
+		kcal: dia.kcal,
+		ultima_refeicao: "2026-11-22 20:00:00",
+	});
+	assert.deepEqual(await pratoDoDia(db, "2026-11-21"), { data: "2026-11-21", refeicoes: 0, kcal: 0, ultima_refeicao: null });
 
 	// Os valores gravados não mudam se o alimento for editado depois.
 	await (db as never as { execute: (s: string) => Promise<unknown> }).execute("UPDATE alimentos SET kcal = 999 WHERE nome = 'Whey protein baunilha'");

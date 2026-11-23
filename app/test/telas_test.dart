@@ -12,6 +12,7 @@ import 'package:saude/core/composicao.dart';
 import 'package:saude/core/mi_scale_parser.dart';
 import 'package:saude/data/armazenamento.dart';
 import 'package:saude/data/modelos.dart';
+import 'package:saude/saude/agregador.dart';
 import 'package:saude/ui/estado_app.dart';
 import 'package:saude/ui/tela_ajustes.dart';
 import 'package:saude/ui/tela_historico.dart';
@@ -86,6 +87,8 @@ Future<EstadoApp> _estado(Directory dir) async {
       leitura: LeituraBalanca(
           pesoKg: u.peso, impedancia: u.impedancia, estabilizado: true, removido: true, temImpedancia: true, medidoEm: u.data));
   app.salvaAgora = u.medidoEm;
+  app.prato = PratoDia(
+      data: dataBrasilia(DateTime.now()), refeicoes: 3, kcal: 1850, ultimaRefeicao: '${dataBrasilia(DateTime.now())} 20:15:00', aguaMl: 1750, metaAguaMl: 2500);
   return app;
 }
 
@@ -129,9 +132,22 @@ void main() {
   }
 
   testWidgets('início', (t) async {
-    await render(t, 'inicio', 'Saúde', (a) => TelaInicio(app: a, irParaAjustes: () {}), altura: 2400);
+    await render(t, 'inicio', 'Saúde', (a) => TelaInicio(app: a, irParaAjustes: () {}), altura: 3000);
     expect(find.text('É você?'), findsNothing);
     expect(find.textContaining('Salvo'), findsOneWidget);
+    expect(find.text('Hoje no prato'), findsOneWidget);
+    expect(find.text('1.850 kcal'), findsOneWidget);
+    expect(find.text('1.750 / 2.500 ml'), findsOneWidget);
+    expect(find.text('atualizado 20:15'), findsOneWidget);
+  });
+
+  testWidgets('início sem refeição hoje', (t) async {
+    await render(t, 'inicio_sem_refeicao', 'Saúde', (a) {
+      a.prato = PratoDia(data: dataBrasilia(DateTime.now()), refeicoes: 0, kcal: 0, aguaMl: 0, metaAguaMl: 2500);
+      return TelaInicio(app: a, irParaAjustes: () {});
+    }, altura: 3000);
+    expect(find.text('Nenhuma refeição registrada'), findsOneWidget);
+    expect(find.textContaining('atualizado 20'), findsNothing);
   });
 
   testWidgets('histórico', (t) async {

@@ -6,6 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../balanca/servico_balanca.dart';
 import '../core/composicao.dart';
 import '../core/mi_scale_parser.dart';
+import '../data/api.dart';
 import '../data/armazenamento.dart';
 import '../data/background.dart';
 import '../data/modelos.dart';
@@ -28,6 +29,10 @@ class EstadoApp extends ChangeNotifier {
   bool hcSegundoPlanoAutorizado = false;
   bool sincronizando = false;
   String? avisoSinc;
+
+  /// Refeições e água de hoje (card "Hoje no prato"). Fica só na memória; recarrega ao abrir e ao puxar a tela.
+  PratoDia? prato;
+  bool carregandoPrato = false;
 
   /// Medição esperando o "É você?".
   Medicao? aConfirmar;
@@ -120,7 +125,36 @@ class EstadoApp extends ChangeNotifier {
     } catch (_) {}
   }
 
+  Future<void>? _buscandoPrato;
+
+  /// Busca no Worker as refeições e a água de hoje. Sem conexão, mantém o que já tinha.
+  /// Chamadas seguidas reaproveitam a busca em andamento.
+  Future<void> atualizarPrato() {
+    if (arm.apiKey.isEmpty) return Future.value();
+    return _buscandoPrato ??= _buscarPrato().whenComplete(() => _buscandoPrato = null);
+  }
+
+  Future<void> _buscarPrato() async {
+    carregandoPrato = true;
+    notifyListeners();
+    try {
+      prato = await ApiSaude(arm.apiUrl, arm.apiKey).baixarPrato(dataBrasilia(DateTime.now()));
+    } catch (_) {
+      // Sem rede ou servidor fora: o card segue com o último valor.
+    } finally {
+      carregandoPrato = false;
+      notifyListeners();
+    }
+  }
+
+  /// O prato só vale para o dia de hoje (o app pode ficar aberto de um dia para o outro).
+  PratoDia? get pratoDeHoje {
+    final p = prato;
+    return p != null && p.data == dataBrasilia(DateTime.now()) ? p : null;
+  }
+
   Future<void> sincronizar({bool lerSaude = true, String? origem}) async {
+    if (lerSaude) unawaited(atualizarPrato());
     if (sincronizando) return;
     sincronizando = true;
     notifyListeners();
