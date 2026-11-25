@@ -157,3 +157,32 @@ class AtividadeDia {
         spo2Medio: _d(j['spo2_medio']),
       );
 }
+
+/// Refeições e água de um dia, vindas do Worker (GET /prato). As refeições são as que o conector Saúde grava.
+class PratoDia {
+  const PratoDia({required this.data, required this.refeicoes, required this.kcal, this.ultimaRefeicao, this.aguaMl = 0, this.metaAguaMl});
+
+  final String data; // AAAA-MM-DD
+  final int refeicoes;
+  final double kcal;
+
+  /// "AAAA-MM-DD HH:MM:SS" da última refeição do dia (null se não houve).
+  final String? ultimaRefeicao;
+  final int aguaMl;
+  final int? metaAguaMl;
+
+  bool get temRefeicao => refeicoes > 0;
+
+  factory PratoDia.fromJson(Map<String, dynamic> j) => PratoDia(
+        data: '${j['data']}',
+        refeicoes: (j['refeicoes'] as num?)?.round() ?? 0,
+        kcal: (j['kcal'] as num?)?.toDouble() ?? 0,
+        ultimaRefeicao: j['ultima_refeicao'] as String?,
+        aguaMl: (j['agua_ml'] as num?)?.round() ?? 0,
+        metaAguaMl: (j['meta_agua_ml'] as num?)?.round(),
+      );
+}
+
+/// Gasto estimado do dia = metabolismo basal (última pesagem) + calorias ativas da pulseira.
+/// Sem basal não há estimativa; sem pulseira conta só o basal.
+double? gastoEstimado({double? basal, double? ativas}) => basal == null ? null : basal + (ativas ?? 0);
