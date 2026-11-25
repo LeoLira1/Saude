@@ -18,7 +18,10 @@ Mi Band ──▶ Mi Fitness ──▶ Health Connect ──▶ App          ▲
 
 - **Balança:** o app escuta os anúncios BLE (service data `0x181B`, 13 bytes) e só salva a medição
   final (peso estabilizado **e** com impedância). A data/hora que a balança manda é a chave única: o
-  mesmo anúncio repetido não duplica. Se o peso diferir mais de 5 kg da última medição, o app pergunta
+  mesmo anúncio repetido não duplica. **Reenvio:** ao subir na balança, ela manda de novo a pesagem anterior
+  (mesmo peso e impedância) com o horário de agora, uns 10 s antes da nova; o app e o Worker descartam toda
+  medição com peso **e** impedância iguais aos da medição anterior da balança, e registram o descarte (no app:
+  Ajustes → Sincronização; no Worker: log). `limpar_reenvios` no MCP acha e apaga os que já estavam gravados. Se o peso diferir mais de 5 kg da última medição, o app pergunta
   "É você?" antes de salvar.
 - **Fórmulas:** porte para Dart da `MiScaleLib` do [openScale](https://github.com/oliexdev/openScale)
   (IMC, gordura, água, osso, visceral, massa muscular) e da `BodyMiScaleLib` (metabolismo basal e
@@ -52,7 +55,7 @@ O token do Turso fica só no Worker; o app nunca o vê.
 ## Ferramentas MCP
 
 `ver_medicoes`, `ver_evolucao`, `resumo_periodo`, `comparar_datas`, `ver_atividade`, `ver_sono`,
-`correlacionar`, `registrar_medicao_manual`, `apagar_medicao` e `resumo_hoje`.
+`correlacionar`, `registrar_medicao_manual`, `apagar_medicao`, `limpar_reenvios` e `resumo_hoje`.
 
 Água ingerida: `registrar_agua`, `ver_agua`, `apagar_agua` e `definir_meta_agua` (tabelas `agua` e `config`;
 aparece também em `resumo_hoje` e em `ver_refeicoes`, à parte da comida e do `agua_pct` da balança).
