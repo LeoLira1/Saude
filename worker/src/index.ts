@@ -25,7 +25,7 @@ import {
 	serieDiaria,
 	somarDias,
 } from "./analise.ts";
-import { abrir, COLUNAS_ATIVIDADE, COLUNAS_MEDICAO, inserirMedicoes, lerAtividade, lerMedicoes, linhas, type Medicao } from "./db.ts";
+import { abrir, COLUNAS_ATIVIDADE, COLUNAS_MEDICAO, inserirMedicoes, lerAtividade, lerMedicoes, linhas, semReenvios, SQL_REENVIOS_GRAVADOS, type Medicao } from "./db.ts";
 import { GitHubHandler } from "./github-handler.ts";
 import { buscar, somar, TIPOS_REFEICAO, NUTRIENTES } from "./nutricao.ts";
 import {
@@ -515,6 +515,48 @@ function createServer() {
 		},
 	);
 
+	server.registerTool(
+		"limpar_reenvios",
+		{
+			description:
+				"Acha no histórico os reenvios da balança: medição com peso e impedância iguais aos da medição anterior e seguida de outra " +
+				"em até 60 s (a pesagem de verdade). Sem confirmar = true só lista. Mostre a lista ao usuário e, depois que ele confirmar, " +
+				"chame com confirmar = true e os ids mostrados: apaga só os ids que continuam na lista.",
+			inputSchema: z.object({
+				confirmar: z.boolean().optional().describe("true para apagar de verdade."),
+				ids: z.array(z.number().int().positive()).max(500).optional().describe("Ids a apagar (da lista mostrada)."),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+		},
+		async ({ confirmar, ids }) => {
+			try {
+				const db = await abrir(env);
+				const lista = linhas<Record<string, unknown> & { id: number }>(await db.execute(SQL_REENVIOS_GRAVADOS));
+				if (!confirmar) {
+					return json({
+						apagado: false,
+						total: lista.length,
+						reenvios: lista.map(enxuta),
+						aviso: lista.length ? "Chame de novo com confirmar = true e os ids para apagar." : "Nenhum reenvio no histórico.",
+					});
+				}
+				const validos = new Set(lista.map((x) => x.id));
+				const apagar = (ids ?? []).filter((id) => validos.has(id));
+				const recusados = (ids ?? []).filter((id) => !validos.has(id));
+				if (apagar.length) {
+					await db.batch(apagar.map((id) => ({ sql: "DELETE FROM medicoes WHERE id = ?", args: [id] })), "write");
+				}
+				return json({
+					apagado: apagar.length > 0,
+					apagados: lista.filter((x) => apagar.includes(x.id)).map(enxuta),
+					...(recusados.length ? { nao_apagados: recusados, motivo: "esses ids não estão na lista de reenvios" } : {}),
+				});
+			} catch (e) {
+				return falha(e);
+			}
+		},
+	);
+
 	// ── Refeições ──────────────────────────────────────────────────────────
 
 	const POR_100G = {
@@ -865,9 +907,12 @@ function createServer() {
 			try {
 				const db = await abrir(env);
 				const hoje = hojeBRT();
-				const ultimas = linhas<Record<string, number | string>>(
-					await db.execute("SELECT * FROM medicoes ORDER BY medido_em DESC LIMIT 2"),
-				);
+				// Sem os reenvios da balança: lê umas a mais e filtra (em ordem de horário).
+				const ultimas = semReenvios(
+					linhas<Medicao>(await db.execute("SELECT * FROM medicoes ORDER BY medido_em DESC LIMIT 12")).reverse(),
+				)
+					.reverse()
+					.slice(0, 2) as unknown as Record<string, number | string>[];
 				const u = ultimas[0];
 				let ha30: Record<string, number | string> | undefined;
 				if (u) {

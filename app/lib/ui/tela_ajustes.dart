@@ -267,6 +267,9 @@ class _SegundoPlano extends StatelessWidget {
       linhaSinc('Última sincronização', ultima),
       if (ultima?['origem'] != 'noturna') linhaSinc('Última noturna', noturna),
       'Próxima noturna (23:00): ${quando(arm.proximaNoturna)}',
+      if (arm.descartadas.isNotEmpty)
+        'Medições da balança descartadas (reenvio/repetição): ${arm.descartadas.length}, '
+            'a última de ${arm.descartadas.last['medido_em']} (${arm.descartadas.last['peso']} kg, ${arm.descartadas.last['impedancia']} Ω)',
     ];
     return Container(
       padding: const EdgeInsets.all(12),

@@ -65,14 +65,58 @@ class Armazenamento {
     return !dif.isNegative && dif <= const Duration(minutes: 30) && m.medidoEm != anterior.medidoEm;
   }
 
-  /// Medições sem as repetições da balança (para telas e comparações).
+  /// Reenvio da balança: ao subir nela, ela manda de novo a pesagem ANTERIOR (mesmo peso e impedância),
+  /// com o horário de agora, uns 10 s antes da pesagem nova. Por isso compara com a medição da balança
+  /// imediatamente anterior, a qualquer distância de tempo.
+  static bool ehReenvio(Medicao m, Medicao? anterior) =>
+      anterior != null &&
+      m.origem != 'manual' &&
+      anterior.origem != 'manual' &&
+      m.impedancia != null &&
+      m.peso == anterior.peso &&
+      m.impedancia == anterior.impedancia;
+
+  /// Última medição da balança (não manual) antes de [medidoEm].
+  Medicao? anteriorDaBalanca(String medidoEm) {
+    Medicao? r;
+    for (final x in medicoes) {
+      if (x.origem != 'manual' && x.medidoEm.compareTo(medidoEm) < 0) r = x;
+    }
+    return r;
+  }
+
+  /// Medições sem as repetições e os reenvios da balança (para telas e comparações).
   List<Medicao> get medicoesDistintas {
     final r = <Medicao>[];
+    Medicao? antBalanca;
     for (final m in medicoes) {
-      if (m.origem != 'manual' && r.any((x) => ehRepeticao(m, x))) continue;
+      if (m.origem != 'manual') {
+        final pula = ehReenvio(m, antBalanca) || r.any((x) => ehRepeticao(m, x));
+        antBalanca = m;
+        if (pula) continue;
+      }
       r.add(m);
     }
     return r;
+  }
+
+  /// Medições descartadas antes de gravar (reenvios e repetições da balança), as 50 mais recentes.
+  List<Map<String, dynamic>> get descartadas =>
+      ((_dados['descartadas'] as List?) ?? const []).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+
+  void _registrarDescarte(Medicao m, String motivo) {
+    final l = descartadas
+      ..add({
+        'quando': DateTime.now().toIso8601String(),
+        'medido_em': m.medidoEm,
+        'peso': m.peso,
+        'impedancia': m.impedancia,
+        'motivo': motivo,
+      });
+    if (l.length > 50) l.removeRange(0, l.length - 50);
+    _dados['descartadas'] = l;
+    // ignore: avoid_print
+    print('Medição descartada: ${m.medidoEm} ${m.peso} kg ${m.impedancia ?? '-'} Ω — $motivo');
   }
 
   Medicao? get ultimaMedicao {
@@ -86,12 +130,23 @@ class Armazenamento {
         ...((_dados['recusadas'] as List?) ?? const []).map((e) => '$e'),
       };
 
-  /// Guarda a medição e põe na fila de envio. Devolve false se já existia ou se é
-  /// repetição da balança (mesma regra do servidor: peso e impedância idênticos nos 30 min anteriores).
+  /// Guarda a medição e põe na fila de envio. Devolve false se já existia, se é reenvio da balança
+  /// (peso e impedância iguais aos da medição anterior) ou repetição (idêntica a outra dos 30 min anteriores).
+  /// Mesmas regras do servidor. Reenvio e repetição ficam registrados em [descartadas].
   bool adicionarMedicao(Medicao m) {
     final lista = ((_dados['medicoes'] as List?) ?? []).cast<dynamic>().toList();
     if (lista.any((e) => (e as Map)['medido_em'] == m.medidoEm)) return false;
-    if (m.origem != 'manual' && medicoes.any((x) => ehRepeticao(m, x))) return false;
+    if (m.origem != 'manual') {
+      final ant = anteriorDaBalanca(m.medidoEm);
+      if (ehReenvio(m, ant)) {
+        _registrarDescarte(m, 'reenvio da balança (igual à medição de ${ant!.medidoEm})');
+        return false;
+      }
+      if (medicoes.any((x) => ehRepeticao(m, x))) {
+        _registrarDescarte(m, 'repetição (idêntica a outra dos 30 min anteriores)');
+        return false;
+      }
+    }
     lista.add(m.toJson());
     _dados['medicoes'] = lista;
     final fila = filaMedicoes.toList()..add(m.medidoEm);

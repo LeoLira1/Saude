@@ -193,6 +193,7 @@ export function linhas<T = Record<string, unknown>>(rs: { rows: unknown[]; colum
 /** Janela em que uma medição da balança com peso e impedância idênticos é tratada como repetida. */
 export const JANELA_DUPLICADA_MIN = 30;
 export const MSG_DUPLICADA = "duplicada, ignorada";
+export const MSG_REENVIO = "reenvio da balança (mesmo peso e impedância da medição anterior), descartada";
 
 /** "AAAA-MM-DD HH:MM:SS" − N minutos, no mesmo formato. */
 export function menosMinutos(medidoEm: string, minutos: number): string {
@@ -200,20 +201,29 @@ export function menosMinutos(medidoEm: string, minutos: number): string {
 	return new Date(t).toISOString().slice(0, 19).replace("T", " ");
 }
 
+/** Última medição da balança (não manual) antes de `medidoEm`: peso e impedância. */
+const SQL_ANTERIOR_BALANCA = `SELECT peso, impedancia FROM medicoes
+	WHERE origem <> 'manual' AND medido_em < ? ORDER BY medido_em DESC LIMIT 1`;
+
 /**
  * Grava medições. Pula (sem erro):
  *  - a que tem o mesmo medido_em de outra já gravada (`duplicadas`);
- *  - a da balança com peso E impedância idênticos a outra dos 30 minutos anteriores (`ignoradas`, "duplicada, ignorada").
- *    A balança às vezes reenvia a mesma pesagem com outro horário.
+ *  - a da balança com peso E impedância idênticos aos da medição da balança imediatamente anterior, a qualquer
+ *    distância de tempo (`ignoradas`, MSG_REENVIO). Ao subir na balança, ela reenvia a pesagem anterior com o
+ *    horário de agora, uns 10 s antes da pesagem nova; por isso o horário não serve para barrar;
+ *  - a da balança com peso E impedância idênticos a outra dos 30 minutos anteriores (`ignoradas`, MSG_DUPLICADA).
  */
 export async function inserirMedicoes(db: Client, itens: Medicao[]) {
 	const cols = ["medido_em", ...COLUNAS_MEDICAO, "origem"];
 	const marcadores = cols.map(() => "?").join(", ");
 	const simples = `INSERT INTO medicoes (${cols.join(", ")}) VALUES (${marcadores})
 		ON CONFLICT(medido_em) DO NOTHING RETURNING id, medido_em`;
-	const comJanela = `INSERT INTO medicoes (${cols.join(", ")}) SELECT ${marcadores}
+	const comTrava = `INSERT INTO medicoes (${cols.join(", ")}) SELECT ${marcadores}
 		WHERE NOT EXISTS (
 			SELECT 1 FROM medicoes WHERE peso = ? AND impedancia IS ? AND medido_em >= ? AND medido_em < ?
+		)
+		AND NOT EXISTS (
+			SELECT 1 FROM (${SQL_ANTERIOR_BALANCA}) u WHERE u.peso = ? AND u.impedancia = ?
 		)
 		ON CONFLICT(medido_em) DO NOTHING RETURNING id, medido_em`;
 	// Em ordem de horário: dentro do mesmo envio, a primeira entra e as repetidas depois dela são barradas.
@@ -221,30 +231,83 @@ export async function inserirMedicoes(db: Client, itens: Medicao[]) {
 	const stmts = ordem.map((m) => {
 		const valores = cols.map((c) => ((m as Record<string, unknown>)[c] ?? null) as InValue);
 		if (m.origem === "manual") return { sql: simples, args: valores };
+		const peso = m.peso ?? null;
+		const imp = m.impedancia ?? null;
 		return {
-			sql: comJanela,
-			args: [...valores, m.peso ?? null, m.impedancia ?? null, menosMinutos(m.medido_em, JANELA_DUPLICADA_MIN), m.medido_em],
+			sql: comTrava,
+			args: [...valores, peso, imp, menosMinutos(m.medido_em, JANELA_DUPLICADA_MIN), m.medido_em, m.medido_em, peso, imp],
 		};
 	});
 	const res = await db.batch(stmts, "write");
 	const inseridas = res.flatMap((r) => linhas<{ id: number; medido_em: string }>(r));
 	const novas = new Set(inseridas.map((r) => r.medido_em));
-	const fora = ordem.filter((m) => !novas.has(m.medido_em)).map((m) => m.medido_em);
-	// Das que não entraram: se o horário existe no banco, já estava gravada; se não, foi barrada pela janela de 30 min.
+	const fora = ordem.filter((m) => !novas.has(m.medido_em));
+	// Das que não entraram: se o horário existe no banco, já estava gravada; se não, foi barrada por uma das travas.
 	let existentes = new Set<string>();
 	if (fora.length) {
 		const rs = await db.execute({
 			sql: `SELECT medido_em FROM medicoes WHERE medido_em IN (${fora.map(() => "?").join(", ")})`,
-			args: fora,
+			args: fora.map((m) => m.medido_em),
 		});
 		existentes = new Set(linhas<{ medido_em: string }>(rs).map((r) => r.medido_em));
 	}
+	const ignoradas: { medido_em: string; resultado: string }[] = [];
+	for (const m of fora.filter((x) => !existentes.has(x.medido_em))) {
+		const ant = linhas<{ peso: number; impedancia: number | null }>(
+			await db.execute({ sql: SQL_ANTERIOR_BALANCA, args: [m.medido_em] }),
+		)[0];
+		const reenvio = !!ant && ant.peso === m.peso && m.impedancia != null && ant.impedancia === m.impedancia;
+		const resultado = reenvio ? MSG_REENVIO : MSG_DUPLICADA;
+		console.log(`medição descartada: ${m.medido_em} ${m.peso} kg ${m.impedancia ?? "-"} Ω — ${resultado}`);
+		ignoradas.push({ medido_em: m.medido_em, resultado });
+	}
 	return {
 		inseridas,
-		duplicadas: fora.filter((k) => existentes.has(k)),
-		ignoradas: fora.filter((k) => !existentes.has(k)).map((medido_em) => ({ medido_em, resultado: MSG_DUPLICADA })),
+		duplicadas: fora.filter((m) => existentes.has(m.medido_em)).map((m) => m.medido_em),
+		ignoradas,
 	};
 }
+
+/** Reenvio da balança: peso e impedância iguais aos da medição da balança imediatamente anterior. */
+export function ehReenvio(m: Medicao, anterior: Medicao | null | undefined): boolean {
+	if (!anterior || m.origem === "manual" || anterior.origem === "manual") return false;
+	return m.peso === anterior.peso && m.impedancia != null && m.impedancia === anterior.impedancia;
+}
+
+/** Tira os reenvios (ver `ehReenvio`). `antes` = última medição da balança antes da lista, se houver. */
+export function semReenvios(ms: Medicao[], antes?: Medicao | null): Medicao[] {
+	let ant = antes && antes.origem !== "manual" ? antes : null;
+	const r: Medicao[] = [];
+	for (const m of ms) {
+		if (m.origem === "manual") {
+			r.push(m);
+			continue;
+		}
+		if (!ehReenvio(m, ant)) r.push(m);
+		ant = m;
+	}
+	return r;
+}
+
+/**
+ * Reenvios já gravados, para limpar o histórico: medição da balança com peso e impedância iguais aos da anterior
+ * e seguida de outra medição em até 60 segundos (a pesagem de verdade). Só leitura.
+ */
+export const SQL_REENVIOS_GRAVADOS = `
+WITH b AS (
+	SELECT id, medido_em, peso, impedancia,
+		LAG(peso) OVER (ORDER BY medido_em) AS peso_ant,
+		LAG(impedancia) OVER (ORDER BY medido_em) AS imp_ant,
+		LAG(medido_em) OVER (ORDER BY medido_em) AS em_ant,
+		LEAD(medido_em) OVER (ORDER BY medido_em) AS em_prox
+	FROM medicoes WHERE origem <> 'manual'
+)
+SELECT id, medido_em, peso, impedancia, em_ant AS repete_a_de, em_prox AS seguida_de,
+	CAST(ROUND((julianday(em_prox) - julianday(medido_em)) * 86400) AS INTEGER) AS segundos_ate_a_seguinte
+FROM b
+WHERE impedancia IS NOT NULL AND peso = peso_ant AND impedancia = imp_ant
+	AND em_prox IS NOT NULL AND (julianday(em_prox) - julianday(medido_em)) * 86400 <= 60
+ORDER BY medido_em`;
 
 export async function upsertAtividade(db: Client, dias: Atividade[]) {
 	const cols = ["data", ...COLUNAS_ATIVIDADE];
@@ -259,12 +322,16 @@ export async function upsertAtividade(db: Client, dias: Atividade[]) {
 	return { gravados: dias.length, datas: dias.map((d) => d.data) };
 }
 
+/** Medições do período, em ordem de horário, já sem os reenvios da balança (ver `semReenvios`). */
 export async function lerMedicoes(db: Client, inicio: string, fim: string): Promise<Medicao[]> {
-	const rs = await db.execute({
-		sql: `SELECT * FROM medicoes WHERE medido_em >= ? AND medido_em < ? ORDER BY medido_em`,
-		args: [inicio, proximoDia(fim)],
-	});
-	return linhas<Medicao>(rs);
+	const [rs, ant] = await db.batch(
+		[
+			{ sql: `SELECT * FROM medicoes WHERE medido_em >= ? AND medido_em < ? ORDER BY medido_em`, args: [inicio, proximoDia(fim)] },
+			{ sql: `SELECT * FROM medicoes WHERE origem <> 'manual' AND medido_em < ? ORDER BY medido_em DESC LIMIT 1`, args: [inicio] },
+		],
+		"read",
+	);
+	return semReenvios(linhas<Medicao>(rs), linhas<Medicao>(ant)[0]);
 }
 
 export async function lerAtividade(db: Client, inicio: string, fim: string): Promise<Atividade[]> {
