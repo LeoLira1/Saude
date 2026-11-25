@@ -5,7 +5,7 @@ Sistema pessoal de saúde em duas partes:
 | Pasta | O que é |
 |---|---|
 | [`app/`](app) | App Flutter para Android. Lê a balança **Xiaomi Mi Body Composition Scale 2** direto pelo Bluetooth (sem parear) e a **Mi Band** pelo Health Connect. Calcula a composição corporal e envia para a API. Funciona sem internet: guarda no celular e reenvia depois. |
-| [`worker/`](worker) | Worker na Cloudflare: API do app (`POST /medicao`, `POST /atividade`) e servidor **MCP** para o Claude, gravando no **Turso**. |
+| [`worker/`](worker) | Worker na Cloudflare: API do app (`POST /medicao`, `POST /atividade`, `GET /prato`) e servidor **MCP** para o Claude, gravando no **Turso**. |
 
 ## Como funciona
 
@@ -30,6 +30,11 @@ Mi Band ──▶ Mi Fitness ──▶ Health Connect ──▶ App          ▲
 - **Pulseira:** lê do Health Connect passos, calorias ativas, frequência cardíaca (média e repouso),
   sono por estágio e SpO2. Sincroniza ao abrir o app e 1x por dia em segundo plano, enviando só os dias
   que mudaram. O sono fica na data em que você acordou.
+
+- **Hoje no prato:** card da tela Início, abaixo de "Hoje na pulseira". Busca no Worker (`GET /prato`) as
+  calorias das refeições de hoje (as que o conector grava) e a água do dia com a meta. Gasto estimado =
+  metabolismo basal da última pesagem + calorias ativas da pulseira de hoje; saldo = ingerido − gasto (verde no
+  déficit, laranja no superávit). Atualiza ao abrir o app e ao puxar a tela para baixo.
 
 ## Publicação
 

@@ -11,7 +11,7 @@ class ErroApi implements Exception {
   String toString() => mensagem;
 }
 
-/// Cliente do Worker (POST /medicao, POST /atividade, GET /medicoes, GET /atividade).
+/// Cliente do Worker (POST /medicao, POST /atividade, GET /medicoes, GET /atividade, GET /prato).
 class ApiSaude {
   ApiSaude(this.base, this.chave, {http.Client? cliente}) : _http = cliente ?? http.Client();
 
@@ -60,6 +60,10 @@ class ApiSaude {
         .map((e) => Medicao.fromJson(Map<String, dynamic>.from(e as Map)))
         .toList();
   }
+
+  /// Refeições (kcal, última refeição) e água do dia [data] (AAAA-MM-DD, horário de Brasília).
+  Future<PratoDia> baixarPrato(String data) async =>
+      PratoDia.fromJson(await _req('GET', '/prato?data=$data'));
 
   Future<List<AtividadeDia>> baixarAtividade({String desde = '1900-01-01'}) async {
     final j = await _req('GET', '/atividade?desde=$desde');

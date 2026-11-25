@@ -155,6 +155,19 @@ export async function totalDoDia(db: Client, data: string) {
 	return { data, refeicoes, ...t, itens_sem_valor: Object.keys(faltando).length ? faltando : undefined };
 }
 
+/** Resumo do dia para o app: refeições, kcal somadas e data_hora da última refeição (null se não houve). */
+export async function pratoDoDia(db: Client, data: string) {
+	const linhasDia = await lerItens(db, data, data);
+	return resumoPrato(data, linhasDia);
+}
+
+export function resumoPrato(data: string, linhasDia: { refeicao_id: number; nome: string | null; data_hora: string; kcal: number | null }[]) {
+	const itens = linhasDia.filter((i) => i.nome);
+	const refeicoes = new Set(linhasDia.map((i) => i.refeicao_id)).size;
+	const ultima = linhasDia.reduce<string | null>((m, i) => (m === null || i.data_hora > m ? i.data_hora : m), null);
+	return { data, refeicoes, kcal: somar(itens).kcal, ultima_refeicao: ultima };
+}
+
 /** Série diária de nutrição para ver_evolucao / resumo_periodo / correlacionar. Só dias com refeição registrada. */
 export async function nutricaoPorDia(db: Client, inicio: string, fim: string) {
 	const itens = (await lerItens(db, inicio, fim)).filter((i) => i.nome);
