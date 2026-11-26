@@ -29,7 +29,11 @@ Mi Band ──▶ Mi Fitness ──▶ Health Connect ──▶ App          ▲
   `app/test/mi_scale_lib_test.dart`.
 - **Pulseira:** lê do Health Connect passos, calorias ativas, frequência cardíaca (média e repouso),
   sono por estágio e SpO2. Sincroniza ao abrir o app e 1x por dia em segundo plano, enviando só os dias
-  que mudaram. O sono fica na data em que você acordou.
+  que mudaram. O sono fica na data em que você acordou. **Sono sem duplicar:** cada estágio é ligado à sessão dona
+  pelo id que o Health Connect manda; sessões que se sobrepõem são a mesma noite e, se mais de um app gravou,
+  fica só a fonte com mais estágios; a linha do tempo é varrida em fatias, então cada minuto conta uma vez. O
+  total não inclui o tempo acordado. Dia com sono impossível (fora de 0–24 h) não é enviado: o app tira o valor,
+  relê a noite do Health Connect e reenvia; se o servidor recusar um dia, os outros seguem (envio um a um).
 
 - **Hoje no prato:** card da tela Início, abaixo de "Hoje na pulseira". Busca no Worker (`GET /prato`) as
   calorias das refeições de hoje (as que o conector grava) e a água do dia com a meta. Gasto estimado =

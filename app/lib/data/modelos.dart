@@ -117,6 +117,39 @@ class AtividadeDia {
     );
   }
 
+  /// Por que o sono deste dia é impossível (o servidor recusaria), ou null se está ok.
+  /// Regras: cada campo entre 0 e 1440 min, e profundo + leve + REM não passa do total (tolerância de
+  /// arredondamento). O total já não inclui o tempo acordado.
+  String? get problemaSono {
+    final campos = {
+      'sono_min': sonoMin,
+      'sono_profundo_min': sonoProfundoMin,
+      'sono_leve_min': sonoLeveMin,
+      'sono_rem_min': sonoRemMin,
+      'acordado_min': acordadoMin,
+    };
+    for (final e in campos.entries) {
+      final v = e.value;
+      if (v != null && (v.isNaN || v < 0 || v > 1440)) return '${e.key} fora da faixa (0–1440): ${v.round()}';
+    }
+    final estagios = (sonoProfundoMin ?? 0) + (sonoLeveMin ?? 0) + (sonoRemMin ?? 0);
+    if (sonoMin != null && estagios > sonoMin! + 3) {
+      return 'estágios (${estagios.round()} min) passam do total (${sonoMin!.round()} min)';
+    }
+    return null;
+  }
+
+  /// O mesmo dia sem os campos de sono (os outros campos seguem).
+  AtividadeDia semSono() => AtividadeDia(
+        data: data,
+        passos: passos,
+        calorias: calorias,
+        fcRepouso: fcRepouso,
+        fcRepousoEstimada: fcRepousoEstimada,
+        fcMedia: fcMedia,
+        spo2Medio: spo2Medio,
+      );
+
   bool get vazio =>
       passos == null &&
       calorias == null &&

@@ -76,6 +76,10 @@ class HealthSync {
     return ok;
   }
 
+  /// Fonte (app) usada no sono de cada dia na última leitura. Mais de uma fonte gravando a mesma noite:
+  /// só a escolhida conta.
+  Map<String, List<String>> fontesSono = {};
+
   /// Erros da última leitura (por tipo). Vazio = tudo leu.
   final List<String> erros = [];
 
@@ -162,7 +166,12 @@ class HealthSync {
     // Sono: o Health Connect devolve a sessão pelo horário em que COMEÇOU. Lê desde 00:00 do dia
     // anterior ao primeiro, para achar também a noite (ou cochilo longo) que acabou no primeiro dia.
     final iniSono = ini.subtract(const Duration(days: 1));
-    final sessoes = (await _ler(HealthDataType.SLEEP_SESSION, iniSono, agora)).map(a).toList();
+    // Cada estágio traz o id da sessão dona e o app que gravou: assim o agregador liga estágio→sessão
+    // sem depender de horário e descarta a mesma noite gravada por mais de uma fonte.
+    final sessoes = [
+      for (final p in await _ler(HealthDataType.SLEEP_SESSION, iniSono, agora))
+        SessaoSono(p.dateFrom, p.dateTo, id: p.uuid, fonte: p.sourceName),
+    ];
     final estagios = <EstagioSono>[];
     const mapa = {
       HealthDataType.SLEEP_DEEP: Estagio.profundo,
@@ -173,10 +182,12 @@ class HealthSync {
     };
     for (final e in mapa.entries) {
       for (final p in await _ler(e.key, iniSono, agora)) {
-        estagios.add(EstagioSono(e.value, p.dateFrom, p.dateTo));
+        estagios.add(EstagioSono(e.value, p.dateFrom, p.dateTo, sessaoId: p.uuid, fonte: p.sourceName));
       }
     }
 
+    final sono = agregarSono(sessoes, estagios);
+    fontesSono = {for (final e in sono.entries) e.key: e.value.fontes};
     return montarDias(
       datas: datas,
       passos: passos,
@@ -184,8 +195,9 @@ class HealthSync {
       batimentos: hr,
       fcRepouso: rhr,
       spo2: ox,
-      sono: agregarSono(sessoes, estagios),
+      sono: sono,
       hoje: dataBrasilia(agora),
+      problemas: erros,
     );
   }
 }
