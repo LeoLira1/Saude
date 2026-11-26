@@ -201,10 +201,27 @@ class Armazenamento {
   void gravarAtividade(Iterable<AtividadeDia> dias) {
     final m = Map<String, dynamic>.from((_dados['atividade'] as Map?) ?? {});
     for (final d in dias) {
-      final antigo = m[d.data] == null ? null : AtividadeDia.fromJson(Map<String, dynamic>.from(m[d.data] as Map));
+      var antigo = m[d.data] == null ? null : AtividadeDia.fromJson(Map<String, dynamic>.from(m[d.data] as Map));
+      // Sono antigo impossível (ex.: noite contada em dobro) não pode sobreviver à mescla.
+      if (antigo != null && antigo.problemaSono != null) antigo = antigo.semSono();
       m[d.data] = d.mesclarSobre(antigo).toJson();
     }
     _dados['atividade'] = m;
+  }
+
+  /// Tira o sono impossível dos dias salvos (o resto do dia fica) e devolve as datas afetadas, para a
+  /// sincronização reler essas noites do Health Connect e reenviar o valor recalculado.
+  List<String> limparSonoInvalido() {
+    final m = Map<String, dynamic>.from((_dados['atividade'] as Map?) ?? {});
+    final datas = <String>[];
+    for (final e in m.entries.toList()) {
+      final d = AtividadeDia.fromJson(Map<String, dynamic>.from(e.value as Map));
+      if (d.problemaSono == null) continue;
+      datas.add(d.data);
+      m[e.key] = d.semSono().toJson();
+    }
+    if (datas.isNotEmpty) _dados['atividade'] = m;
+    return datas..sort();
   }
 
   /// "Impressão digital" do que já foi enviado por dia: só reenvia o que mudou.

@@ -18,10 +18,11 @@ class ResultadoSinc {
 /// Lê o Health Connect, guarda localmente e envia ao Worker só o que é novo.
 /// Usada ao abrir o app e pela tarefa diária em segundo plano.
 class Sincronizacao {
-  Sincronizacao(this.arm);
+  Sincronizacao(this.arm, {ApiSaude Function()? api}) : _criarApi = api;
   final Armazenamento arm;
+  final ApiSaude Function()? _criarApi;
 
-  ApiSaude get _api => ApiSaude(arm.apiUrl, arm.apiKey);
+  ApiSaude get _api => _criarApi?.call() ?? ApiSaude(arm.apiUrl, arm.apiKey);
 
   /// [origem]: noturna, reserva diária, ao abrir, ao sair, manual. Fica registrada para os Ajustes.
   Future<ResultadoSinc> tudo({bool lerSaude = true, String? origem}) async {
@@ -35,7 +36,9 @@ class Sincronizacao {
           r.erro = 'Sem permissão de leitura no Health Connect';
         } else {
           // Relê desde a última leitura boa (mín. 7, máx. 30 dias): recupera os dias em que nada sincronizou.
-          final dias = diasParaLer(arm.ultimaSincSaude, DateTime.now());
+          // Noites com sono impossível já salvas (ex.: 31 h): tira o valor e relê essas datas para recalcular.
+          final releer = arm.limparSonoInvalido();
+          final dias = diasParaLer(arm.ultimaSincSaude, DateTime.now(), releer: releer);
           final lidos = await hs.lerDias(dias);
           arm.gravarAtividade(lidos.where((d) => !d.vazio));
           r.diasLidos = lidos.length;
@@ -83,13 +86,37 @@ class Sincronizacao {
         arm.tirarDaFila(lote.map((m) => m.medidoEm));
         r.medicoesEnviadas += lote.length;
       }
+      // Sono impossível nunca sai do app: limpa e manda o dia sem ele (o servidor mantém o que já tinha).
+      arm.limparSonoInvalido();
       final pend = arm.atividadePendente();
+      final recusados = <String>[];
       for (var i = 0; i < pend.length; i += 100) {
         final lote = pend.sublist(i, (i + 100).clamp(0, pend.length));
-        await _api.enviarAtividade(lote);
-        arm.marcarAtividadeEnviada(lote);
-        r.diasEnviados += lote.length;
+        try {
+          await _api.enviarAtividade(lote);
+          arm.marcarAtividadeEnviada(lote);
+          r.diasEnviados += lote.length;
+        } on ErroApi catch (e) {
+          // Sem conexão ou chave errada: tenta tudo de novo na próxima.
+          if (!e.mensagem.startsWith('Servidor:')) rethrow;
+          // O servidor recusa o lote inteiro por um dia ruim: manda um a um para os outros passarem.
+          if (lote.length == 1) {
+            recusados.add('${lote.single.data}: ${e.mensagem}');
+            continue;
+          }
+          for (final d in lote) {
+            try {
+              await _api.enviarAtividade([d]);
+              arm.marcarAtividadeEnviada([d]);
+              r.diasEnviados++;
+            } on ErroApi catch (e1) {
+              if (!e1.mensagem.startsWith('Servidor:')) rethrow;
+              recusados.add('${d.data}: ${e1.mensagem}');
+            }
+          }
+        }
       }
+      if (recusados.isNotEmpty) throw ErroApi('Recusado pelo servidor — ${recusados.join('; ')}');
       arm.ultimoErro = null;
     } catch (e) {
       r.erro = '$e';
